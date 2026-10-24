@@ -1,0 +1,18 @@
+# Challenge match data is licensed for the competition only: never commit it.
+data/
+*.mp4
+# Anything derived frame-by-frame from the match data (probabilities, caches) stays local too.
+cache/
+*.npz
+# Our own submissions are uploaded through the form, not published here.
+submissions/
+# Metrica's public sample data is fetched by train.py, not vendored.
+external/sample-data/
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+.pytest_cache/
+.DS_Store
