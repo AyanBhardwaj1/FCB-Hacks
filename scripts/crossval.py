@@ -25,38 +25,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "external", "more-than-a-hack-2027", "evaluation"))
 
-import possession_metrics as pm  # noqa: E402
-
-from mtah import decode, features, sample_games  # noqa: E402
+from common import score, unit_features  # noqa: E402
+from mtah import decode, sample_games  # noqa: E402
 from mtah.model import FrameModels  # noqa: E402
-
-CACHE = os.path.join(ROOT, "cache", "sample")
-
-
-def degraded_features(game, seed):
-    """(feats, labels) for one degraded copy of a sample game, cached on disk."""
-    os.makedirs(CACHE, exist_ok=True)
-    path = os.path.join(CACHE, "g{}_s{}.pkl".format(game, seed))
-    if os.path.exists(path):
-        with open(path, "rb") as fh:
-            return pickle.load(fh)
-    match, events = sample_games.load_game(game)
-    labels = sample_games.labels_from_events(events, match.n_frames, match.halves)
-    deg = sample_games.degrade(match, labels, seed=seed)
-    out = (features.compute(deg), labels, deg.halves)
-    with open(path, "wb") as fh:
-        pickle.dump(out, fh, protocol=4)
-    return out
-
-
-def score(labels_true, labels_pred):
-    """(spellF1, macroF1, n_pred, n_gt) exactly as the scorer computes them, minus the extras."""
-    gt, pred = pm.label_codes(labels_true), pm.label_codes(labels_pred)
-    runs = pm.valid_runs(gt)
-    spell = pm.spell_scores(gt, pm.fill_abstentions(pred, runs), runs)
-    macro = pm.macro_f1(pm.scored_confusion(pm.confusion(gt, pred)))
-    return spell["mean_f1"], macro, spell["n_pred"], spell["n_gt"]
-
 
 def nearest_baseline(feats, halves, n, window=50):
     """The challenge's published baseline idea on our features: nearest team, majority vote."""
@@ -81,6 +52,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--stage2", action="store_true", help="add the stage-2 context model")
+    ap.add_argument("--exclude", help="regex of feature names to leave out")
     ap.add_argument("--oof", default=os.path.join(ROOT, "cache", "oof.pkl"))
     ap.add_argument("--train-seeds", type=int, nargs="+", default=[1, 2])
     ap.add_argument("--test-seed", type=int, default=100)
@@ -91,7 +63,7 @@ def main():
     data = {}
     for g in sample_games.GAMES:
         for s in train_seeds + [args.test_seed]:
-            data[(g, s)] = degraded_features(g, s)
+            data[(g, s)] = unit_features(g, s)
     print("features ready in {:.0f}s".format(time.time() - t0))
 
     oof = {}
@@ -99,7 +71,7 @@ def main():
         train = [data[(g, s)] + (g,) for g in sample_games.GAMES if g != held
                  for s in train_seeds]
         t = time.time()
-        models = FrameModels(stage2=args.stage2).fit(train)
+        models = FrameModels(stage2=args.stage2, exclude=args.exclude).fit(train)
         feats, labels, halves = data[(held, args.test_seed)]
         p_dead, p_home = models.predict(feats, halves)
         oof[held] = (p_dead, p_home, labels, halves)
@@ -119,8 +91,8 @@ def main():
         print("game {}: dead acc {:.3f}  team acc (alive) {:.3f}   baseline50 spellF1 {:.3f} "
               "macroF1 {:.3f}".format(g, dead_acc, team_acc, b[0], b[1]))
 
-    grid = dict(a_team=[0.5, 1.0, 2.0], switch=[4, 8, 16, 32, 64],
-                stop=[4, 8, 16, 32], restart=[4, 8, 16, 32])
+    grid = dict(a_team=[1.0, 2.0, 3.0], switch=[16, 32, 48, 64, 96],
+                stop=[16, 32], restart=[16, 32])
     if args.quick:
         grid = dict(a_team=[1.0], switch=[8, 16, 32, 64], stop=[8, 16, 32], restart=[8, 16, 32])
     rows = []

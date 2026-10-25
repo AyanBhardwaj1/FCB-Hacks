@@ -191,3 +191,122 @@ def test_models_are_exactly_team_symmetric():
     q_dead, q_home = models.predict(features.compute(m), m.halves)
     np.testing.assert_allclose(q_dead, p_dead, atol=1e-9)
     np.testing.assert_allclose(q_home, 1 - p_home, atol=1e-9)
+
+
+# -- touch events and side windows (feature v2) --------------------------------------------------------
+
+def test_touch_events_detects_a_kick_and_credits_the_nearest_team():
+    fps = 25
+    n = 100
+    t = np.arange(n)
+    # ball rolls +x at 10 m/s, is kicked back at frame 50 by a home player standing there
+    bx = np.where(t < 50, 10.0 + 10.0 * t / fps, 30.0 - 10.0 * (t - 50) / fps)
+    by = np.full(n, 30.0)
+    d_home = np.abs(bx - 30.0) + 0.3       # the home player stands at x = 30
+    d_away = np.full(n, 15.0)
+    touch_h, touch_a = features.touch_events(bx, by, d_home, d_away, fps)
+    hits = np.flatnonzero(touch_h)
+    assert len(hits) and np.all(np.abs(hits - 50) <= 3)
+    assert not touch_a.any()
+
+
+def test_touch_events_ignore_smooth_flight_and_unattended_kinks():
+    fps = 25
+    n = 100
+    t = np.arange(n)
+    bx = 10.0 + 10.0 * t / fps                # constant velocity: no touch anywhere
+    by = np.full(n, 30.0)
+    far = np.full(n, 20.0)
+    th, ta = features.touch_events(bx, by, np.full(n, 0.5), far, fps)
+    assert not th.any() and not ta.any()
+    bx2 = np.where(t < 50, bx, bx[50] - 10.0 * (t - 50) / fps)   # a kink with nobody near
+    th, ta = features.touch_events(bx2, by, far, far, fps)
+    assert not th.any() and not ta.any()
+
+
+def test_touch_events_are_nan_safe():
+    fps = 25
+    bx = np.full(60, np.nan)
+    by = np.full(60, np.nan)
+    th, ta = features.touch_events(bx, by, np.full(60, np.nan), np.full(60, np.nan), fps)
+    assert th.dtype == bool and not th.any() and not ta.any()
+
+
+def test_side_delta_is_future_minus_past_mean():
+    a = np.concatenate([np.zeros(50), np.ones(50)])
+    d = features.side_delta(a, 10)
+    assert d[50] == pytest.approx(1.0)       # 10 frames after (incl. none of the past) vs before
+    assert d[20] == pytest.approx(0.0) and d[80] == pytest.approx(0.0)
+    assert np.isnan(d[0])                    # nothing before the first frame
+
+
+# -- review fixes ------------------------------------------------------------------------------------
+
+def test_parser_rejects_lines_with_missing_fields():
+    """A group written as a bare 'NaN' must not shift every later field one column left."""
+    from mtah.io import _parse_lines
+    with pytest.raises(ValueError, match="line"):
+        _parse_lines(["1:0.1,0.2,1;0.3,0.4,2:0.5,0.6,0\n", "2:NaN;0.3,0.4,2:0.5,0.6,0\n"], 10)
+
+
+def test_load_epts_rejects_records_outside_every_format_block(tmp_path):
+    meta, raw = tmp_path / "m.xml", tmp_path / "r.txt"
+    meta.write_text(META)
+    raw.write_text(RAW + "9:0.1,0.2,1.5;0.5,0.5,2.0:0.3,0.4,0.0\n")   # frame 9: no spec block
+    with pytest.raises(ValueError, match="DataFormatSpecification"):
+        load_epts(str(meta), str(raw), n_frames=10)
+
+
+def test_models_refuse_features_they_were_not_trained_on():
+    from mtah.model import FrameModels
+    m, lab = _toy_match(0)
+    feats = features.compute(m)
+    models = FrameModels(gb_params=dict(max_iter=5), stride=4).fit([(feats, lab, m.halves, 0)])
+    del feats["team"][HOME]["own_d"], feats["team"][AWAY]["own_d"]
+    with pytest.raises(ValueError, match="own_d"):
+        models.predict(feats, m.halves)
+
+
+def test_shipped_model_matches_the_current_features():
+    import pickle
+    with open(config.MODEL_PATH, "rb") as fh:
+        models = pickle.load(fh)
+    m, _ = _toy_match(3)
+    p_dead, p_home = models.predict(features.compute(m), m.halves)
+    assert p_dead.shape == p_home.shape == (m.n_frames,)
+
+
+def test_degraded_ball_visibility_does_not_mark_label_boundaries():
+    """Ball dropout must not switch on/off exactly where play stops or restarts (label leak)."""
+    m, _ = _toy_match(11, T=20000)
+    blocks = np.arange(m.n_frames) // 400
+    labels = np.where(blocks % 3 == 2, "D", np.where(blocks % 2 == 0, "H", "A"))
+    m.ball_x = np.where(np.isnan(m.ball_x), m.x[:, 0], m.ball_x).astype(np.float32)
+    m.ball_y = np.where(np.isnan(m.ball_y), m.y[:, 0], m.ball_y).astype(np.float32)
+    deg = sample_games.degrade(m, labels, seed=4)
+    seen = np.isfinite(deg.ball_x)
+    flips = np.flatnonzero(seen[1:] != seen[:-1]) + 1
+    boundaries = np.flatnonzero((labels[1:] == "D") != (labels[:-1] == "D")) + 1
+    at_boundary = np.isin(boundaries, flips).mean()
+    base_rate = len(flips) / m.n_frames
+    assert at_boundary < max(0.1, 5 * base_rate), (at_boundary, base_rate)
+
+
+def test_degraded_dead_ball_is_no_jitterier_than_live_ball():
+    """The synthetic dead-ball path must not carry its own noise: the labels would leak into
+    ball speed and the touch features through how jittery the ball looks."""
+    m, _ = _toy_match(12, T=20000)
+    t = np.arange(m.n_frames)
+    blocks = t // 400
+    labels = np.where(blocks % 3 == 2, "D", np.where(blocks % 2 == 0, "H", "A"))
+    m.ball_x = (50 + 20 * np.sin(t / 200.0)).astype(np.float32)     # smooth live ball
+    m.ball_y = (34 + 10 * np.cos(t / 300.0)).astype(np.float32)
+    m.ball_x[labels == "D"] = np.nan                                  # clean data: no dead ball
+    m.ball_y[labels == "D"] = np.nan
+    deg = sample_games.degrade(m, labels, seed=5, spike_rate=0.0)
+    bx = deg.ball_x.astype(np.float64)
+    jerk = np.abs(bx[2:] - 2 * bx[1:-1] + bx[:-2])
+    mid = labels[1:-1]
+    live = np.nanmedian(jerk[mid != "D"])
+    dead = np.nanmedian(jerk[mid == "D"])
+    assert dead < 1.2 * live, (dead, live)

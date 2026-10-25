@@ -7,8 +7,9 @@ label every one of the 199,319 frames of FC Barcelona vs Athletic Club as `H` (B
 counts how many of the match's real possessions are recovered as whole possessions.
 
 **How it works, in one paragraph.** Gradient-boosted frame classifiers read team-level tracking
-features: ball proximity, who last and next controlled the ball, team shape, collective speed,
-ball out of bounds, kickoff shape. One classifier gives P(dead) and the other gives
+features: ball proximity, touches detected from ball kinematics, who last and next touched or
+controlled the ball, team shape and how it turns over, collective speed, ball out of bounds,
+kickoff shape. One classifier gives P(dead) and the other gives
 P(Barça | alive). A three-state Viterbi decoder then turns them into clean possession intervals, paying a fixed cost
 for every change of state. That cost is the challenge's "controlled possession" rule written as a
 price: a deflection doesn't pay for a change of possession, sustained control does. **Training
@@ -19,16 +20,19 @@ write-up: [docs/TECHNICAL.md](docs/TECHNICAL.md).
 
 ## Results so far
 
-Leave-one-game-out on the sample games, scored with the challenge's own `possession_metrics.py`:
+Leave-one-game-out on the sample games (3 held-out games × 3 fresh degradation seeds that no
+design decision looked at), scored with the challenge's own `possession_metrics.py`
+(`python scripts/evaluate.py`):
 
-| method | spellF1 | macroF1 |
-|---|---|---|
-| challenge baseline idea (nearest player, ±2 s majority vote) | ~0.21 | ~0.55 |
-| **this pipeline** | **~0.69** | **~0.89** |
+| method | spellF1 | macroF1 | spellF1, harsh degradation |
+|---|---|---|---|
+| challenge baseline idea (nearest player, ±2 s majority vote) | ~0.20 | ~0.46 | — |
+| **this pipeline** | **0.720 ± 0.015** | **0.899** | **0.615 ± 0.032** |
 
-The baseline's ~0.21 here is close to its 0.2433 on the real match, which suggests the degraded
+The baseline's ~0.20 here is close to its 0.2433 on the real match, which suggests the degraded
 sample games are a fair stand-in. These are **not** competition scores. The real number only
-exists once the organisers score the private full-match ground truth.
+exists once the organisers score the private full-match ground truth. Details, ablations and error
+analysis are in [docs/TECHNICAL.md](docs/TECHNICAL.md#3-validation).
 
 ## Reproduce
 
@@ -46,8 +50,9 @@ python run.py --team <team_name>        # -> submissions/<team_name>.csv, valida
 
 # optional: retrain the model from the public sample data (fetched automatically)
 python train.py
-# optional: the validation study behind the numbers above
-python scripts/crossval.py
+# optional: the validation behind the numbers above
+python scripts/evaluate.py --tag mine          # held-out scores, both scenarios
+python scripts/crossval.py                     # decoder-cost sweep (degradation seed 100)
 ```
 
 `run.py` runs the challenge's own validator on the file it writes. It also scores the file
@@ -69,7 +74,9 @@ mtah/model.py           gradient-boosted frame models (optional stage 2), exact 
 mtah/decode.py          three-state Viterbi with switch / stop / restart costs
 mtah/tags.py            optional Smart Tagging priors (off by default, see the write-up)
 mtah/sample_games.py    Metrica sample games: event-derived labels, ATD-like degradation
-scripts/crossval.py     leave-one-game-out validation and decoder sweep
+scripts/evaluate.py     leave-one-game-out evaluation with paired comparisons (--compare A B)
+scripts/crossval.py     decoder-cost sweep on out-of-fold probabilities
+scripts/error_analysis.py   transition-level error breakdown and oracle upper bounds
 scripts/make_fake_bundle.py   challenge-format stand-in data for smoke tests
 external/more-than-a-hack-2027   the challenge repo (git submodule): scorer, games.py
 tests/                  python -m pytest -q

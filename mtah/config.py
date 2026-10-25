@@ -14,11 +14,14 @@ CACHE_DIR = os.path.join(ROOT, "cache")
 
 GAME = "BAR-ATH"
 
-# Chosen by scripts/crossval.py (see docs/TECHNICAL.md for the table).
-DECODER = dict(a_dead=1.0, a_team=1.0, switch=16.0, stop=32.0, restart=32.0)
+# Chosen by scripts/crossval.py on degradation seed 100: within 0.002 spellF1 of the best setting
+# for both feature sets (plateau 0.730-0.735). Reported results use fresh seeds. See
+# docs/TECHNICAL.md.
+DECODER = dict(a_dead=1.0, a_team=2.0, switch=48.0, stop=32.0, restart=32.0)
 
-# Degradation seeds used to build the training set from each sample game.
-TRAIN_SEEDS = (1, 2)
+# Degradation seeds used to build the training set from each sample game. Four rather than two:
+# more varied noise for the same three matches (see docs/TECHNICAL.md).
+TRAIN_SEEDS = (1, 2, 3, 4)
 
 
 def challenge_modules():

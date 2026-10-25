@@ -27,6 +27,11 @@ BALL_INTERP_MAX = 10      # frames; shorter ball gaps are linearly interpolated
 CTRL_RADIUS = 1.5         # m; a player this close to a slow ball is treated as touching it
 CTRL_MARGIN = 0.5         # m; ...and the nearest opponent must be this much further away
 CTRL_MAX_BALL_SPEED = 12  # m/s; a ball faster than this is in flight, not under control
+TOUCH_LAG = 3             # frames; ball velocity before vs after each frame, over this lag
+TOUCH_MIN_DV = 5.0        # m/s; a change of ball velocity at least this big is a touch candidate
+TOUCH_RADIUS = 2.5        # m; ...credited only if a player is this close
+TOUCH_MARGIN = 0.5        # m; ...and clearly closer than the nearest opponent
+SIDE_S = 2.0              # s; window for "next 2 s minus previous 2 s" turnover features
 CAP_S = 15.0              # s; time-since / time-until features are capped here
 SCALES_S = (1.0, 3.0)     # s; centred rolling-mean windows added for the main features
 
@@ -77,6 +82,66 @@ def frames_since(mask, cap):
 
 def frames_until(mask, cap):
     return frames_since(mask[::-1], cap)[::-1]
+
+
+def side_means(a, w):
+    """(mean of the w frames before, mean of the w frames after) each frame, NaN-aware.
+
+    The frame itself is in neither window; a window with no finite value gives NaN.
+    """
+    a = np.asarray(a, dtype=np.float64)
+    ok = np.isfinite(a)
+    c = np.concatenate(([0.0], np.cumsum(np.where(ok, a, 0.0))))
+    n = np.concatenate(([0], np.cumsum(ok)))
+    i = np.arange(len(a))
+    lo = np.maximum(0, i - w)
+    hi = np.minimum(len(a), i + 1 + w)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        before = (c[i] - c[lo]) / (n[i] - n[lo])
+        after = (c[hi] - c[i + 1]) / (n[hi] - n[i + 1])
+    return before, after
+
+
+def side_delta(a, w):
+    """Mean over the next w frames minus mean over the previous w frames."""
+    before, after = side_means(a, w)
+    return after - before
+
+
+def touch_events(bx, by, d_home, d_away, fps, lag=TOUCH_LAG, min_dv=TOUCH_MIN_DV,
+                 radius=TOUCH_RADIUS, margin=TOUCH_MARGIN):
+    """(touch_home, touch_away) boolean arrays: frames where a player of that team touched the ball.
+
+    A touch is a sharp change of ball velocity -- the velocity over the `lag` frames after a frame
+    differs from the velocity over the `lag` frames before it by `min_dv` m/s or more, and the
+    change peaks there -- with a player of one team within `radius` m and at least `margin` m
+    closer than any opponent. That catches one-touch passes, first-time clearances and
+    interceptions, which a "player next to a slow ball" rule misses. Pass smoothed positions in:
+    raw tracking jitter alone produces velocity changes of a few m/s.
+    """
+    bx = np.asarray(bx, dtype=np.float64)
+    by = np.asarray(by, dtype=np.float64)
+    n = len(bx)
+    dv = np.full(n, np.nan)
+    if n > 2 * lag:
+        k = lag
+        vbx = (bx[k:-k] - bx[:-2 * k]) * fps / k       # before, at frames k..n-k-1
+        vby = (by[k:-k] - by[:-2 * k]) * fps / k
+        vax = (bx[2 * k:] - bx[k:-k]) * fps / k        # after
+        vay = (by[2 * k:] - by[k:-k]) * fps / k
+        dv[k:-k] = np.hypot(vax - vbx, vay - vby)
+    peak = np.isfinite(dv) & (dv >= min_dv)
+    if peak.any():
+        # keep only the frame where the change peaks within +/- lag
+        filled = np.where(np.isfinite(dv), dv, -np.inf)
+        local = np.lib.stride_tricks.sliding_window_view(
+            np.pad(filled, lag, constant_values=-np.inf), 2 * lag + 1).max(axis=1)
+        peak &= filled >= local
+    dh = np.where(np.isfinite(d_home), d_home, np.inf)
+    da = np.where(np.isfinite(d_away), d_away, np.inf)
+    touch_home = peak & (dh <= radius) & (dh + margin <= da)
+    touch_away = peak & (da <= radius) & (da + margin <= dh)
+    return touch_home, touch_away
 
 
 # -- ball ---------------------------------------------------------------------------------------
@@ -293,6 +358,31 @@ def compute(match):
             since[k][a:b] = frames_since(ctrl[k][a:b], CAP_S * fps) / fps
             until[k][a:b] = frames_until(ctrl[k][a:b], CAP_S * fps) / fps
 
+    # touches: sharp changes of (lightly smoothed) ball velocity next to one team's player
+    bxs = rolling_mean(np.where(known, bx, np.nan), 2)
+    bys = rolling_mean(np.where(known, by, np.nan), 2)
+    bxs[~known], bys[~known] = np.nan, np.nan
+    touch = dict(zip((HOME, AWAY), touch_events(bxs, bys, per_team[HOME]["dmin"],
+                                                per_team[AWAY]["dmin"], fps)))
+    t_since = {k: np.full(T, CAP_S) for k in (HOME, AWAY)}
+    t_until = {k: np.full(T, CAP_S) for k in (HOME, AWAY)}
+    last_toucher = np.zeros(T)    # +1 home touched last, -1 away, 0 nobody yet (per half)
+    next_toucher = np.zeros(T)
+    for a, b in match.halves:
+        for k in (HOME, AWAY):
+            t_since[k][a:b] = frames_since(touch[k][a:b], CAP_S * fps) / fps
+            t_until[k][a:b] = frames_until(touch[k][a:b], CAP_S * fps) / fps
+        sign = np.where(touch[HOME][a:b], 1.0, np.where(touch[AWAY][a:b], -1.0, 0.0))
+        idx = np.where(sign != 0, np.arange(b - a), -1)
+        last = np.maximum.accumulate(idx)
+        last_toucher[a:b] = np.where(last >= 0, sign[np.maximum(last, 0)], 0.0)
+        ridx = np.where(sign[::-1] != 0, np.arange(b - a), -1)
+        nxt = np.maximum.accumulate(ridx)
+        next_toucher[a:b] = np.where(nxt >= 0, sign[::-1][np.maximum(nxt, 0)], 0.0)[::-1]
+    ball_vx = np.full(T, np.nan)
+    ball_vx[1:-1] = (bxs[2:] - bxs[:-2]) * fps / 2
+    side_w = int(SIDE_S * fps)
+
     for k in (HOME, AWAY):
         o = AWAY if k == HOME else HOME
         me, op = per_team[k], per_team[o]
@@ -330,6 +420,25 @@ def compute(match):
         f["ball_xa_m1"] = smooth(f["ball_xa"], 1.0)
         f["ball_minus_own_cx"] = f["ball_xa"] - me["cx"]
         f["ball_minus_opp_cx"] = f["ball_xa"] + op["cx"]     # opp centroid is -cx in our frame
+        # touches (feature v2)
+        own_sign = 1.0 if k == HOME else -1.0
+        f["own_since_touch"], f["opp_since_touch"] = t_since[k], t_since[o]
+        f["own_until_touch"], f["opp_until_touch"] = t_until[k], t_until[o]
+        f["last_toucher"] = last_toucher * own_sign
+        f["next_toucher"] = next_toucher * own_sign
+        for name, team in (("own", k), ("opp", o)):
+            before, after = side_means(touch[team].astype(np.float64), side_w)
+            f[name + "_touches_before"] = before * side_w
+            f[name + "_touches_after"] = after * side_w
+        # turnover signatures: how each block and the ball move next 2 s vs previous 2 s
+        for name in ("own", "opp"):
+            f[name + "_fwd_v_delta"] = side_delta(f[name + "_fwd_v"], side_w)
+        f["own_sx_delta"] = side_delta(me["sx"], side_w)
+        f["opp_sx_delta"] = side_delta(op["sx"], side_w)
+        bfv = ball_vx * me["dir"]                       # ball velocity towards the goal k attacks
+        f["ball_fwd_v_m1"] = smooth(bfv, 1.0)
+        bb, ba = side_means(bfv, side_w)
+        f["ball_fwd_v_before"], f["ball_fwd_v_after"] = bb, ba
         team_feats[k] = f
 
     # kickoff shape: both teams entirely in their own halves, ball near the centre spot
