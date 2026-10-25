@@ -121,7 +121,18 @@ def read_epts_meta(meta_path):
 
 
 def _parse_lines(lines, n_cols):
-    """Numeric array [n, n_cols] from raw EPTS lines, all separators flattened to commas."""
+    """Numeric array [n, n_cols] from raw EPTS lines, all separators flattened to commas.
+
+    Every line must carry exactly n_cols fields. pandas would pad a short line with trailing
+    NaNs, so a group written as a bare "NaN" would silently shift every later field one column
+    left -- that is checked here, line by line, and raised.
+    """
+    counts = np.array([ln.count(",") + ln.count(";") + ln.count(":") + 1 for ln in lines])
+    bad = np.flatnonzero(counts != n_cols)
+    if len(bad):
+        i = int(bad[0])
+        raise ValueError("line {!r}... has {} fields, the format spec says {} ({} such lines)"
+                         .format(lines[i][:40], counts[i], n_cols, len(bad)))
     text = "".join(lines).replace(":", ",").replace(";", ",")
     frame = pd.read_csv(_io.StringIO(text), header=None, na_values=["NaN", "nan", ""],
                         dtype=np.float64, engine="c")
@@ -168,6 +179,23 @@ def load_epts(meta_path, raw_path, pitch=None, n_frames=None, name=""):
     bx = np.full(n_frames, np.nan, dtype=np.float32)
     by = np.full(n_frames, np.nan, dtype=np.float32)
 
+    covered = np.zeros(len(ids), dtype=bool)
+    for block in meta["blocks"]:
+        covered |= (ids >= block["start"]) & (ids <= block["end"])
+    if not covered.all():
+        raise ValueError("{} tracking records (first frame_id {}) fall outside every "
+                         "DataFormatSpecification block of {}".format(
+                             int((~covered).sum()), int(ids[~covered][0]), meta_path))
+    outside = (ids < 1) | (ids > n_frames)
+    if outside.any():
+        raise ValueError("{} tracking records have frame_id outside 1..{} (first {}); is this "
+                         "the right recording?".format(int(outside.sum()), n_frames,
+                                                       int(ids[outside][0])))
+    unknown = [pid for b in meta["blocks"] for pid, _ in b["slots"] if pid not in col_of]
+    if unknown:
+        raise ValueError("format spec references players missing from the metadata: {}"
+                         .format(sorted(set(map(str, unknown)))[:5]))
+
     for block in meta["blocks"]:
         sel = np.flatnonzero((ids >= block["start"]) & (ids <= block["end"]))
         if not len(sel):
@@ -175,8 +203,6 @@ def load_epts(meta_path, raw_path, pitch=None, n_frames=None, name=""):
         n_cols = 1 + sum(len(ch) for _, ch in block["slots"]) + len(block["ball"])
         data = _parse_lines([lines[i] for i in sel], n_cols)
         rows = data[:, 0].astype(np.int64) - 1
-        keep = (rows >= 0) & (rows < n_frames)
-        data, rows = data[keep], rows[keep]
         col = 1
         for pid, chans in block["slots"]:
             j = col_of.get(pid)

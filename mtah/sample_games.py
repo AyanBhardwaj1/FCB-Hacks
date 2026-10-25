@@ -135,8 +135,6 @@ def labels_from_events(events, n_frames, halves, min_control_s=2.0, fps=25):
         evs = [e for e in events if start <= e["start"] < stop]
         cur = np.full(stop - start, D, dtype="<U1")
         team = None
-        alive_from = None   # frame where the current alive stretch started
-        dead_from = start
         timeline = []       # (frame, kind, team)
         for e in evs:
             if e["type"] in CONTROL_TYPES:
@@ -262,10 +260,21 @@ def fill_dead_ball(match, labels, seed=0):
             w = (np.arange(1, carry_n + 1) / carry_n)[:, None]
             path[drift_n:drift_n + carry_n] = mid * (1 - w) + end_xy * w
         path[drift_n + carry_n:] = end_xy
-        path += 0.3 * rng.standard_normal(path.shape)
+        # no noise here: degrade() adds the same tracking noise to every frame, and extra
+        # jitter on dead frames only would leak the labels into ball speed and touches
         fill = ~np.isfinite(bx[a:b])
         bx[a:b][fill] = path[fill, 0]
         by[a:b][fill] = path[fill, 1]
+    # The clean data also drops the ball for a moment around some stoppages (1-2% of live
+    # frames, clustered next to dead stretches). Interpolate those too, so that every gap in the
+    # degraded ball comes from degrade()'s label-free dropout and none marks a label boundary.
+    for a, b in match.halves:
+        for arr in (bx, by):
+            seg = arr[a:b]
+            ok = np.isfinite(seg)
+            if ok.sum() >= 2 and not ok.all():
+                idx = np.arange(len(seg))
+                seg[~ok] = np.interp(idx[~ok], idx[ok], seg[ok])
     out = Match(**{k: getattr(match, k) for k in match.__dataclass_fields__})
     out.ball_x, out.ball_y = bx.astype(np.float32), by.astype(np.float32)
     return out
@@ -284,23 +293,25 @@ def _solve_burst_mask(n, target, region, weights, seed, median=18, sigma=1.1):
     return miss & region
 
 
-def degrade(match, labels, seed=0, alive_missing=None, dead_missing=None, ball_noise=0.25,
+def degrade(match, labels, seed=0, ball_missing=None, ball_noise=0.25,
             player_missing=0.07, player_noise=0.10, fragment_every_s=40.0, spike_rate=0.002):
     """A copy of `match` that looks like automatic, uncorrected tracking.
 
-    `labels` (the event-derived H / A / D) are used only to decide where the ball is synthesised
-    and how often it is lost -- never as a feature. The ball goes missing in bursts, more often
-    when it is fast (in the air) or crowded, which is where the challenge ATD loses it too. Live
-    and dead frames get separate missing shares, drawn per seed when not given (live 0.28-0.42,
-    dead 0.40-0.80), which brackets the challenge's 41% overall. Players drop out in bursts and
+    `labels` (the event-derived H / A / D) are used only by fill_dead_ball, to invent a ball path
+    where the clean data has none. That path is noise-free and then treated exactly like the
+    real one, so the labels never decide how noisy the ball is or when it is lost directly. Ball dropout is one
+    burst process over the whole half whose rate depends only on what a tracker would struggle
+    with: a fast ball (in the air), a crowded ball, a ball off the pitch, a ball nobody is near.
+    It must not depend on the labels directly: dropout clipped to alive / dead regions switches
+    on and off exactly where play stops and restarts, and a model learns that leak instead of
+    football. The missing share over the halves is `ball_missing`, drawn per seed in 0.36-0.46
+    when not given (the challenge ATD: 41% of graded frames). Players drop out in bursts and
     their tracks are cut into fragments packed into slots, so no slot follows one person for long.
     A speed channel is synthesised from the clean positions, because the challenge ATD has one.
     """
     rng = np.random.default_rng(seed)
-    if alive_missing is None:
-        alive_missing = rng.uniform(0.28, 0.42)
-    if dead_missing is None:
-        dead_missing = rng.uniform(0.40, 0.80)
+    if ball_missing is None:
+        ball_missing = rng.uniform(0.36, 0.46)
     match = fill_dead_ball(match, labels, seed)
     T, P = match.x.shape
     fps = match.fps
@@ -311,16 +322,22 @@ def degrade(match, labels, seed=0, alive_missing=None, dead_missing=None, ball_n
     speed = np.sqrt(vx ** 2 + vy ** 2)
     speed = np.clip(speed + 0.15 * rng.standard_normal(speed.shape), 0, 12)
 
-    # ball: missing more when fast or crowded
+    # ball: missing more when fast, crowded, off the pitch or unattended -- never by label
     bx, by = match.ball_x.astype(np.float64), match.ball_y.astype(np.float64)
     bv = np.nan_to_num(np.sqrt(np.gradient(bx) ** 2 + np.gradient(by) ** 2) * fps)
     d = np.sqrt((match.x - bx[:, None]) ** 2 + (match.y - by[:, None]) ** 2)
     crowd = np.nansum(d < 3.0, axis=1)
-    weights = 1.0 + 1.5 * (bv > 12) + 0.5 * np.clip(crowd - 1, 0, 4)
-    alive = (labels == H) | (labels == A)
-    dead = labels == D
-    miss = _solve_burst_mask(T, alive_missing, alive, weights, seed + 1) | \
-        _solve_burst_mask(T, dead_missing, dead, None, seed + 2, median=40)
+    with np.errstate(invalid="ignore"):
+        nearest = np.where(np.isfinite(d).any(axis=1), np.nanmin(np.where(np.isfinite(d), d,
+                                                                           np.inf), axis=1), 0)
+    off_pitch = np.nan_to_num(np.fmax.reduce([-bx, bx - match.pitch[0], -by,
+                                              by - match.pitch[1]])) > 1.0
+    weights = 1.0 + 1.5 * (bv > 12) + 0.5 * np.clip(crowd - 1, 0, 4) + 2.0 * off_pitch + \
+        1.0 * (nearest > 8.0)
+    graded = np.zeros(T, dtype=bool)
+    for a, b in match.halves:
+        graded[a:b] = True
+    miss = _solve_burst_mask(T, ball_missing, graded, weights, seed + 1)
     miss |= ~np.isfinite(bx)
     new_bx = bx + ball_noise * rng.standard_normal(T)
     new_by = by + ball_noise * rng.standard_normal(T)

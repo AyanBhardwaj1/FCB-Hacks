@@ -17,14 +17,21 @@ from mtah import config, features, sample_games
 from mtah.model import FrameModels
 
 SAMPLE_REPO = "https://github.com/metrica-sports/sample-data"
+# Pinned so a later upstream commit cannot change the retrained model.
+SAMPLE_COMMIT = "e706dd506b360d69d9d123d5b8026e7294b13996"
 
 
 def ensure_sample_data():
-    if os.path.isdir(sample_games.DEFAULT_DIR):
-        return
     target = os.path.dirname(sample_games.DEFAULT_DIR)
-    print("fetching Metrica sample data into {} ...".format(target))
-    subprocess.check_call(["git", "clone", "--depth", "1", SAMPLE_REPO, target])
+    if not os.path.isdir(sample_games.DEFAULT_DIR):
+        print("fetching Metrica sample data into {} ...".format(target))
+        subprocess.check_call(["git", "clone", SAMPLE_REPO, target])
+        subprocess.check_call(["git", "-C", target, "checkout", "-q", SAMPLE_COMMIT])
+    head = subprocess.check_output(["git", "-C", target, "rev-parse", "HEAD"]).decode().strip()
+    if head != SAMPLE_COMMIT:
+        sys.exit("sample data at {} is commit {}, expected {} -- run "
+                 "`git -C {} checkout {}`".format(target, head, SAMPLE_COMMIT, target,
+                                                  SAMPLE_COMMIT))
 
 
 def training_items(seeds):

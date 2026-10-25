@@ -23,10 +23,12 @@ so swapping the two teams' tracking swaps the answer exactly. The model cannot l
 usually has the ball" from three sample matches and carry it to Barcelona.
 """
 
+import re
+
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
 
-from .features import frames_since, matrices, rolling_mean
+from .features import frames_since, matrices, rolling_mean, side_means
 
 # Params
 GB_PARAMS = dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=31, min_samples_leaf=400,
@@ -52,21 +54,6 @@ def _logit(p):
     return np.log(p / (1 - p))
 
 
-def _side_means(a, w):
-    """(mean of the w frames before, mean of the w frames after) each frame, NaN-aware."""
-    a = np.asarray(a, dtype=np.float64)
-    ok = np.isfinite(a)
-    c = np.concatenate(([0.0], np.cumsum(np.where(ok, a, 0.0))))
-    n = np.concatenate(([0], np.cumsum(ok)))
-    i = np.arange(len(a))
-    lo = np.maximum(0, i - w)
-    hi = np.minimum(len(a), i + 1 + w)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        before = (c[i] - c[lo]) / (n[i] - n[lo])
-        after = (c[hi] - c[i + 1]) / (n[hi] - n[i + 1])
-    return before, after
-
-
 def context(p_dead, p_home, halves, fps=25):
     """Stage-2 inputs: [T, k] for the dead question and [T, k] for the home question.
 
@@ -75,7 +62,6 @@ def context(p_dead, p_home, halves, fps=25):
     """
     T = len(p_dead)
     ld, lh = _logit(p_dead), _logit(p_home)
-    cols_d, cols_h = [], []
     blocks_d = [np.full(T, np.nan) for _ in range(2 + 2 * len(CONTEXT_S) + 4 * len(SIDE_S) + 2)]
     blocks_h = [np.full(T, np.nan) for _ in range(1 + len(CONTEXT_S) + 3 * len(SIDE_S))]
     for a, b in halves:
@@ -89,8 +75,8 @@ def context(p_dead, p_home, halves, fps=25):
             out_h.append(rolling_mean(h, w))
         for s in SIDE_S:
             w = max(1, int(round(s * fps)))
-            db, da = _side_means(d, w)
-            hb, ha = _side_means(h, w)
+            db, da = side_means(d, w)
+            hb, ha = side_means(h, w)
             out_d += [db, da, np.abs(hb), np.abs(ha)]
             out_h += [hb, ha, ha - hb]
         # how long the dead model has been confident, either way
@@ -105,15 +91,40 @@ def context(p_dead, p_home, halves, fps=25):
 
 
 class Stage1:
-    def __init__(self, gb_params=None, stride=TRAIN_STRIDE):
+    def __init__(self, gb_params=None, stride=TRAIN_STRIDE, exclude=None):
         self.gb_params = dict(GB_PARAMS, **(gb_params or {}))
         self.stride = stride
+        self.exclude = exclude   # regex: feature names to leave out (ablations)
+        self.names = None        # (team names, shared names) the models were trained on
+
+    def _matrices(self, feats):
+        """(xh, xa, xs), columns picked by name in the order the models were trained on.
+
+        The first call (in fit) fixes the column lists, minus anything matching `exclude`.
+        Later calls select those names and raise if any is missing, so a model can never be fed
+        a feature set it was not trained on -- not even one with the same column count.
+        """
+        nt, xh, xa, ns, xs = matrices(feats)
+        if getattr(self, "names", None) is None:
+            pat = re.compile(self.exclude) if self.exclude else None
+            self.names = ([n for n in nt if not (pat and pat.search(n))],
+                          [n for n in ns if not (pat and pat.search(n))])
+        want_t, want_s = self.names
+        missing = sorted(set(want_t) - set(nt)) + sorted(set(want_s) - set(ns))
+        if missing:
+            raise ValueError("features missing for this model (retrain with train.py?): {}"
+                             .format(", ".join(missing[:10])))
+        it = {n: i for i, n in enumerate(nt)}
+        js = {n: i for i, n in enumerate(ns)}
+        cols_t = [it[n] for n in want_t]
+        cols_s = [js[n] for n in want_s]
+        return xh[:, cols_t], xa[:, cols_t], xs[:, cols_s]
 
     def fit(self, items):
         """items: [(feats, labels)] where labels is an array of 'H'/'A'/'D'/'X' per frame."""
         dX, dy, pX, py = [], [], [], []
         for feats, labels in items:
-            _, xh, xa, _, xs = matrices(feats)
+            xh, xa, xs = self._matrices(feats)
             sel = np.flatnonzero(np.isin(labels, ["H", "A", "D"]))[::self.stride]
             lab = labels[sel]
             d1, d2 = _dead_design(xh[sel], xa[sel], xs[sel])
@@ -132,7 +143,7 @@ class Stage1:
         return self
 
     def predict(self, feats):
-        _, xh, xa, _, xs = matrices(feats)
+        xh, xa, xs = self._matrices(feats)
         d1, d2 = _dead_design(xh, xa, xs)
         p_dead = 0.5 * (self.dead.predict_proba(d1)[:, 1] + self.dead.predict_proba(d2)[:, 1])
         p1, p2 = _poss_design(xh, xa, xs)
@@ -145,19 +156,20 @@ class FrameModels:
     match, and stage 2 is trained on stage-1 predictions made by models that left that match out.
     """
 
-    def __init__(self, gb_params=None, stride=TRAIN_STRIDE, stage2=False):
+    def __init__(self, gb_params=None, stride=TRAIN_STRIDE, stage2=False, exclude=None):
         self.gb_params = gb_params
         self.stride = stride
         self.use_stage2 = stage2
+        self.exclude = exclude
 
     def fit(self, items):
-        self.stage1 = Stage1(self.gb_params, self.stride).fit([(f, l) for f, l, _, _ in items])
+        self.stage1 = Stage1(self.gb_params, self.stride, self.exclude).fit([(f, l) for f, l, _, _ in items])
         if not self.use_stage2:
             return self
         groups = sorted({g for _, _, _, g in items})
         dX, dy, hX, hy = [], [], [], []
         for g in groups:
-            inner = Stage1(self.gb_params, self.stride).fit(
+            inner = Stage1(self.gb_params, self.stride, self.exclude).fit(
                 [(f, l) for f, l, _, gg in items if gg != g])
             for f, l, halves, gg in items:
                 if gg != g:

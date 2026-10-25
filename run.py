@@ -26,6 +26,10 @@ import numpy as np
 from mtah import config, decode, features, tags
 from mtah.io import load_epts, load_smart_tagging, read_epts_meta, write_submission
 
+# Params
+MIN_BALL_COVERAGE = 0.20   # share of graded frames with a ball; the real ATD has 59.3%
+MIN_PLAYERS = 10           # mean tracked players on graded frames; the real ATD has 20.5
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -56,8 +60,17 @@ def main():
     match = load_epts(paths["atd_meta"], paths["atd_raw"], pitch=games.GAMES[config.GAME]["pitch"],
                       n_frames=n_frames, name=config.GAME)
     match.halves = halves
-    print("loaded ATD: {} frames, {} track slots, ball seen on {:.1%} ({:.0f}s)".format(
-        match.n_frames, match.x.shape[1], np.isfinite(match.ball_x).mean(), time.time() - t))
+    graded = np.concatenate([np.arange(a, b) for a, b in halves])
+    ball_cov = np.isfinite(match.ball_x[graded]).mean()
+    players = np.isfinite(match.x[graded]).sum(axis=1).mean()
+    print("loaded ATD: {} frames, {} track slots; on graded frames ball seen {:.1%}, {:.1f} "
+          "players tracked ({:.0f}s)".format(match.n_frames, match.x.shape[1], ball_cov, players,
+                                            time.time() - t))
+    # DATA.md: ball on 59.3% of graded frames, ~20.5 players. Far below that means the file was
+    # misread (wrong recording, wrong frame counter), and the output would be meaningless.
+    if ball_cov < MIN_BALL_COVERAGE or players < MIN_PLAYERS:
+        sys.exit("tracking coverage too low (ball {:.1%}, {:.1f} players) -- refusing to write a "
+                 "submission from it".format(ball_cov, players))
 
     feats = features.compute(match)
     with open(args.model, "rb") as fh:
