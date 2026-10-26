@@ -108,6 +108,72 @@ def side_delta(a, w):
     return after - before
 
 
+def window_speed(bx, by, fps, half_s=0.5):
+    """Ball speed from the displacement between the mean position over the next `half_s`
+    seconds and over the previous `half_s` seconds -- averaging ~12 frames each way cuts
+    per-frame tracking jitter ~3.5x, so "is the ball still" stays answerable on noisy tracking,
+    where a frame-to-frame speed reads 2-4 m/s for a resting ball. NaN where a side has no ball.
+
+    The displacement is divided by the actual time between the two windows' centres (the mean
+    frame index of the sightings on each side), so a window cut short by a tracker gap does not
+    make a moving ball look slow.
+    """
+    w = max(1, int(round(half_s * fps)))
+    seen = np.isfinite(bx) & np.isfinite(by)
+    xb, xa = side_means(np.where(seen, bx, np.nan), w)
+    yb, ya = side_means(np.where(seen, by, np.nan), w)
+    ib, ia = side_means(np.where(seen, np.arange(len(bx), dtype=np.float64), np.nan), w)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.hypot(xa - xb, ya - yb) * fps / (ia - ib)
+
+
+def last_sighting_velocity(bx, by, fps, back_s=0.25):
+    """(vx, vy) in m/s on frames where the ball is seen, from that sighting and the sightings in
+    the `back_s` seconds before it, divided by their actual time spacing. Backward-looking, so it
+    is unbiased on the last sighting before a tracker gap -- the frame projected_exit projects
+    from. NaN where the ball is not seen or nothing was seen just before.
+    """
+    w = max(1, int(round(back_s * fps)))
+    seen = np.isfinite(bx) & np.isfinite(by)
+    xb, _ = side_means(np.where(seen, bx, np.nan), w)
+    yb, _ = side_means(np.where(seen, by, np.nan), w)
+    ib, _ = side_means(np.where(seen, np.arange(len(bx), dtype=np.float64), np.nan), w)
+    dt = (np.arange(len(bx)) - ib) / float(fps)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        vx = np.where(seen, (bx - xb) / dt, np.nan)
+        vy = np.where(seen, (by - yb) / dt, np.nan)
+    return vx, vy
+
+
+def projected_exit(bx, by, known, vx, vy, pitch, fps, cap=CAP_S):
+    """Seconds until the ball's straight-line path crosses a pitch line, from its last sighting.
+
+    For each frame: take the last frame where the ball was known, its position and velocity
+    there, and the time t_cross that straight path needs to reach the nearest line it is heading
+    for. The value is t_cross minus the time elapsed since that sighting -- positive while the
+    projected crossing is still ahead, negative once the ball "should" be out. That locates the
+    moment play stops even when the tracker loses the ball on its way out. `cap` where the ball
+    is not heading for a line (or would take longer than cap); NaN before the first sighting.
+    """
+    n = len(bx)
+    L, W = pitch
+    idx = np.where(known, np.arange(n), -1)
+    last = np.maximum.accumulate(idx)
+    out = np.full(n, np.nan)
+    ok = last >= 0
+    j = last[ok]
+    x, y = bx[j], by[j]
+    u, v = np.nan_to_num(vx[j]), np.nan_to_num(vy[j])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        tx = np.where(u > 0, (L - x) / u, np.where(u < 0, -x / u, np.inf))
+        ty = np.where(v > 0, (W - y) / v, np.where(v < 0, -y / v, np.inf))
+    t_cross = np.maximum(np.minimum(tx, ty), 0.0)
+    elapsed = (np.flatnonzero(ok) - j) / float(fps)
+    val = np.where(np.isfinite(t_cross) & (t_cross <= cap), t_cross - elapsed, cap)
+    out[ok] = np.clip(val, -cap, cap)
+    return out
+
+
 def touch_events(bx, by, d_home, d_away, fps, lag=TOUCH_LAG, min_dv=TOUCH_MIN_DV,
                  radius=TOUCH_RADIUS, margin=TOUCH_MARGIN):
     """(touch_home, touch_away) boolean arrays: frames where a player of that team touched the ball.
@@ -299,6 +365,29 @@ def compute(match):
     ly = np.where(last >= 0, by[np.maximum(last, 0)], np.nan)
     shared["last_ball_oob"] = np.fmax.reduce([-lx, lx - L, -ly, ly - W])
 
+    # boundary features (v3): one-sided in time, so the decoder can place stops and restarts
+    # to the frame rather than at the blurred edge of a centred window
+    out_now = known & (oob > 0.3)
+    vw = window_speed(np.where(known, bx, np.nan), np.where(known, by, np.nan), fps)
+    still_now = np.isfinite(vw) & (vw < 1.0)
+    for name, mask in (("oob", out_now), ("still", still_now)):
+        shared["since_{}_s".format(name)] = np.full(T, CAP_S)
+        shared["until_{}_s".format(name)] = np.full(T, CAP_S)
+        for a, b in match.halves:
+            shared["since_{}_s".format(name)][a:b] = frames_since(mask[a:b], CAP_S * fps) / fps
+            shared["until_{}_s".format(name)][a:b] = frames_until(mask[a:b], CAP_S * fps) / fps
+    vx0, vy0 = last_sighting_velocity(np.where(known, bx, np.nan), np.where(known, by, np.nan),
+                                      fps)
+    shared["ball_proj_exit_s"] = np.full(T, np.nan)
+    for a, b in match.halves:
+        shared["ball_proj_exit_s"][a:b] = projected_exit(
+            bx[a:b], by[a:b], known[a:b], vx0[a:b], vy0[a:b], (L, W), fps)
+    shared["ball_window_speed"] = vw
+    for s_ in (1, 2):
+        before, after = side_means(vw, s_ * fps)
+        shared["ball_speed_before_{}s".format(s_)] = before
+        shared["ball_speed_after_{}s".format(s_)] = after
+
     # activity
     n_tracked = np.isfinite(x).sum(axis=1).astype(np.float64)
     shared["n_tracked"] = n_tracked
@@ -314,6 +403,8 @@ def compute(match):
     fast = np.where(np.isfinite(spd), (spd > 4.0).astype(np.float64), np.nan)
     shared["frac_fast_m3"] = smooth(_nan_reduce(np.nanmean, fast), 3.0)
     shared["speed_max_m1"] = smooth(_nan_reduce(np.nanmax, spd), 1.0)
+    for s_ in (1, 2):
+        shared["speed_delta_{}s".format(s_)] = side_delta(mean_v, s_ * fps) / ref
     # how much the whole picture is changing: mean |centroid velocity| of both teams
     # (filled below once per-team centroids exist)
 

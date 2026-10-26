@@ -310,3 +310,125 @@ def test_degraded_dead_ball_is_no_jitterier_than_live_ball():
     live = np.nanmedian(jerk[mid != "D"])
     dead = np.nanmedian(jerk[mid == "D"])
     assert dead < 1.2 * live, (dead, live)
+
+
+# -- dead-ball boundary features (feature v3) -----------------------------------------------------------
+
+def test_projected_exit_counts_down_through_a_tracker_gap():
+    """Ball seen moving towards the touchline at 10 m/s, 4 m away, then lost: the projected
+    crossing is 0.4 s after the last sighting, so 1 s into the gap it is 0.6 s in the past."""
+    fps = 25
+    n = 60
+    t = np.arange(n)
+    bx = np.full(n, 50.0)
+    by = 58.0 + 10.0 * t / fps          # 68 m wide pitch: reaches y = 68 at t = 1 s
+    known = t <= 15                     # last seen at frame 15, y = 64
+    bx[~known] = np.nan
+    by[~known] = np.nan
+    vx = np.zeros(n)
+    vy = np.where(known, 10.0, np.nan)
+    out = features.projected_exit(bx, by, known, vx, vy, (105.0, 68.0), fps, cap=10.0)
+    assert out[15] == pytest.approx(0.4, abs=1e-6)
+    assert out[40] == pytest.approx(0.4 - 25 / fps, abs=1e-6)       # 1 s after last sighting
+    assert out[0] == pytest.approx(1.0, abs=1e-6)                     # 10 m to go at 10 m/s
+
+
+def test_projected_exit_is_capped_for_a_still_or_unseen_ball():
+    fps = 25
+    n = 20
+    bx = np.full(n, 50.0)
+    by = np.full(n, 30.0)
+    known = np.ones(n, dtype=bool)
+    out = features.projected_exit(bx, by, known, np.zeros(n), np.zeros(n), (105.0, 68.0), fps,
+                                  cap=10.0)
+    assert np.all(out == 10.0)                                        # not heading anywhere
+    never = features.projected_exit(np.full(n, np.nan), np.full(n, np.nan), np.zeros(n, bool),
+                                    np.zeros(n), np.zeros(n), (105.0, 68.0), fps, cap=10.0)
+    assert np.all(np.isnan(never))
+
+
+def test_boundary_features_exist_and_keep_team_symmetry():
+    m, _ = _toy_match(2)
+    f = features.compute(m)
+    for name in ("since_oob_s", "until_oob_s", "since_still_s", "until_still_s",
+                 "ball_proj_exit_s", "speed_delta_1s", "speed_delta_2s",
+                 "ball_speed_before_1s", "ball_speed_after_1s"):
+        assert name in f["shared"], name
+        assert np.isfinite(f["shared"][name][m.halves[0][0] + 100:m.halves[0][1] - 100]).any()
+
+
+def test_degradation_parameters_are_drawn_per_seed_within_ranges():
+    """Training data randomizes the tracking noise (the real ATD's level is unknown); explicit
+    arguments still pin it, which is how the evaluation scenarios stay fixed."""
+    a, b = sample_games.draw_params(1), sample_games.draw_params(2)
+    assert a == sample_games.draw_params(1)                  # deterministic per seed
+    assert a != b
+    for p in (a, b):
+        for name, (lo, hi) in sample_games.PARAM_RANGES.items():
+            assert lo <= p[name] <= hi, name
+    pinned = sample_games.draw_params(1, ball_noise=0.25)
+    assert pinned["ball_noise"] == 0.25
+
+
+def test_still_ball_survives_tracking_noise():
+    """A ball resting on a set-piece spot must read as still even with 0.5 m of per-frame jitter
+    (the harsh scenario); a rolling ball must not."""
+    rng = np.random.default_rng(0)
+    fps = 25
+    n = 400
+    t = np.arange(n)
+    rolling = t >= 200
+    bx = np.where(rolling, 50.0 + 6.0 * (t - 200) / fps, 50.0) + 0.5 * rng.standard_normal(n)
+    by = 30.0 + 0.5 * rng.standard_normal(n)
+    v = features.window_speed(bx, by, fps)
+    assert np.nanmedian(v[30:170]) < 1.0            # resting ball
+    assert np.nanmedian(v[230:370]) > 4.0           # rolling at 6 m/s
+
+
+# -- review fixes, round 3 -----------------------------------------------------------------------------
+
+def test_last_sighting_velocity_is_unbiased_at_the_edge_of_a_gap():
+    """projected_exit projects from the last sighting, so the velocity there must be the real one
+    (a centred difference over a gap halved it)."""
+    fps = 25
+    n = 60
+    t = np.arange(n)
+    by = 40.0 + 10.0 * t / fps
+    bx = np.full(n, 50.0)
+    known = t <= 30
+    vx, vy = features.last_sighting_velocity(np.where(known, bx, np.nan),
+                                             np.where(known, by, np.nan), fps)
+    assert vy[30] == pytest.approx(10.0, rel=0.02)
+    assert vx[30] == pytest.approx(0.0, abs=1e-9)
+    assert np.isnan(vy[31])                                  # no sighting on this frame
+
+
+def test_window_speed_is_not_slowed_next_to_a_gap():
+    fps = 25
+    n = 200
+    t = np.arange(n)
+    bx = 10.0 + 10.0 * t / fps
+    by = np.full(n, 30.0)
+    bx[100:] = np.nan
+    by[100:] = np.nan
+    v = features.window_speed(bx, by, fps)
+    assert np.all(np.abs(v[90:99] - 10.0) < 0.5), v[90:99]
+
+
+def test_dead_ball_paths_vary_in_shape():
+    """The synthetic dead-ball path must not be one template (a model could learn its timing):
+    the still period before the restart varies in length and is sometimes absent."""
+    m, _ = _toy_match(13, T=40000)
+    t = np.arange(m.n_frames)
+    labels = np.where((t // 500) % 2 == 1, "D", "H")
+    m.ball_x = np.where(labels == "D", np.nan, 30 + 10 * np.sin(t / 50.0)).astype(np.float32)
+    m.ball_y = np.where(labels == "D", np.nan, 30 + 10 * np.cos(t / 70.0)).astype(np.float32)
+    filled = sample_games.fill_dead_ball(m, labels, seed=3)
+    still_lengths = []
+    for a in range(500, m.n_frames - 500, 1000):
+        seg_x, seg_y = filled.ball_x[a:a + 500], filled.ball_y[a:a + 500]
+        moving = np.hypot(np.diff(seg_x), np.diff(seg_y)) > 1e-6
+        still_lengths.append(len(moving) - (np.flatnonzero(moving)[-1] + 1 if moving.any() else 0))
+    still_lengths = np.array(still_lengths)
+    assert (still_lengths == 0).any()                         # sometimes no still period
+    assert len(set(still_lengths[still_lengths > 0])) > 5     # and varied when there is one

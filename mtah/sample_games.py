@@ -249,11 +249,16 @@ def fill_dead_ball(match, labels, seed=0):
             start_xy, vel = end_xy.copy(), np.zeros(2)
         n = b - a
         t = np.arange(n, dtype=np.float64)
-        drift_n = min(n, int(1.5 * fps))
-        still_n = min(n - drift_n, int(rng.uniform(1.5, 4.0) * fps))
+        # every stretch gets its own shape, so no feature can learn one template's timing:
+        # how fast the ball slows, how long it drifts, and whether it sits still before the
+        # restart at all (it does not when it is picked up and thrown in straight away)
+        tau = rng.uniform(5.0, 25.0)
+        drift_n = min(n, int(rng.uniform(0.5, 2.5) * fps))
+        still_s = 0.0 if rng.random() < 0.3 else rng.uniform(1.0, 4.0)
+        still_n = min(n - drift_n, int(still_s * fps))
         carry_n = n - drift_n - still_n
         path = np.zeros((n, 2))
-        decay = (1 - np.exp(-t[:drift_n] / 10.0)) * 10.0
+        decay = (1 - np.exp(-t[:drift_n] / tau)) * tau
         path[:drift_n] = start_xy + vel * decay[:, None]
         mid = path[drift_n - 1] if drift_n else start_xy
         if carry_n:
@@ -293,25 +298,56 @@ def _solve_burst_mask(n, target, region, weights, seed, median=18, sigma=1.1):
     return miss & region
 
 
-def degrade(match, labels, seed=0, ball_missing=None, ball_noise=0.25,
-            player_missing=0.07, player_noise=0.10, fragment_every_s=40.0, spike_rate=0.002):
+# Ranges the degradation draws from when a parameter is not given. The real ATD's noise level
+# is unknown, so training data spans a range around the best guess rather than one value: a
+# model trained at a single noise level learns thresholds (a "still" ball, a touch) that break
+# when the real data is noisier. The challenge publishes the ball-missing share (41%).
+PARAM_RANGES = {
+    "ball_missing": (0.36, 0.46),
+    "ball_noise": (0.15, 0.50),           # m, per-frame ball jitter
+    "player_noise": (0.05, 0.25),         # m
+    "player_missing": (0.04, 0.12),       # share of player frames lost in bursts
+    "spike_rate": (0.001, 0.005),         # false ball detections per frame
+    "fragment_every_s": (15.0, 60.0),     # mean track-fragment length
+}
+
+
+def draw_params(seed, **given):
+    """Degradation parameters for one seed: `given` values as passed, the rest drawn uniformly
+    from PARAM_RANGES with a generator of their own (so drawing never shifts the noise itself)."""
+    rng = np.random.default_rng([seed, 7919])
+    out = {}
+    for name, (lo, hi) in PARAM_RANGES.items():
+        draw = float(rng.uniform(lo, hi))
+        out[name] = given[name] if given.get(name) is not None else draw
+    return out
+
+
+def degrade(match, labels, seed=0, ball_missing=None, ball_noise=None, player_missing=None,
+            player_noise=None, fragment_every_s=None, spike_rate=None):
     """A copy of `match` that looks like automatic, uncorrected tracking.
 
     `labels` (the event-derived H / A / D) are used only by fill_dead_ball, to invent a ball path
     where the clean data has none. That path is noise-free and then treated exactly like the
-    real one, so the labels never decide how noisy the ball is or when it is lost directly. Ball dropout is one
-    burst process over the whole half whose rate depends only on what a tracker would struggle
-    with: a fast ball (in the air), a crowded ball, a ball off the pitch, a ball nobody is near.
-    It must not depend on the labels directly: dropout clipped to alive / dead regions switches
-    on and off exactly where play stops and restarts, and a model learns that leak instead of
-    football. The missing share over the halves is `ball_missing`, drawn per seed in 0.36-0.46
-    when not given (the challenge ATD: 41% of graded frames). Players drop out in bursts and
-    their tracks are cut into fragments packed into slots, so no slot follows one person for long.
-    A speed channel is synthesised from the clean positions, because the challenge ATD has one.
+    real one, so the labels never decide how noisy the ball is or when it is lost directly.
+    Ball dropout is one burst process over the whole half whose rate depends only on what a
+    tracker would struggle with: a fast ball (in the air), a crowded ball, a ball off the pitch,
+    a ball nobody is near. It must not depend on the labels directly: dropout clipped to alive /
+    dead regions switches on and off exactly where play stops and restarts, and a model learns
+    that leak instead of football. Players drop out in bursts and their tracks are cut into
+    fragments packed into slots, so no slot follows one person for long. A speed channel is
+    synthesised from the clean positions, because the challenge ATD has one.
+
+    Every noise parameter left as None is drawn per seed from PARAM_RANGES (see draw_params);
+    pass values to pin them, as the evaluation scenarios do.
     """
+    prm = draw_params(seed, ball_missing=ball_missing, ball_noise=ball_noise,
+                      player_missing=player_missing, player_noise=player_noise,
+                      fragment_every_s=fragment_every_s, spike_rate=spike_rate)
+    ball_missing, ball_noise = prm["ball_missing"], prm["ball_noise"]
+    player_missing, player_noise = prm["player_missing"], prm["player_noise"]
+    fragment_every_s, spike_rate = prm["fragment_every_s"], prm["spike_rate"]
     rng = np.random.default_rng(seed)
-    if ball_missing is None:
-        ball_missing = rng.uniform(0.36, 0.46)
     match = fill_dead_ball(match, labels, seed)
     T, P = match.x.shape
     fps = match.fps
