@@ -432,3 +432,97 @@ def test_dead_ball_paths_vary_in_shape():
     still_lengths = np.array(still_lengths)
     assert (still_lengths == 0).any()                         # sometimes no still period
     assert len(set(still_lengths[still_lengths > 0])) > 5     # and varied when there is one
+
+
+# -- possession-equal training weights (hand-over round) ------------------------------------------------
+
+def test_spell_weights_make_every_possession_count_equally():
+    from mtah.model import spell_weights
+    labels = np.array(["D"] * 10 + ["H"] * 25 + ["A"] * 250 + ["H"] * 100 + ["X"] * 5)
+    w = spell_weights(labels, ref_frames=100, lo=0.0, hi=1e9)
+    assert np.all(w[:10] == 1.0) and np.all(w[-5:] == 0.0)        # dead unweighted, X unused
+    totals = [w[10:35].sum(), w[35:285].sum(), w[285:385].sum()]
+    np.testing.assert_allclose(totals, 100.0)                      # each possession sums the same
+
+
+def test_spell_weights_are_clipped():
+    from mtah.model import spell_weights
+    labels = np.array(["H"] * 5 + ["A"] * 5000)
+    w = spell_weights(labels, ref_frames=100, lo=0.25, hi=4.0)
+    assert w[:5].max() == 4.0 and w[5:].min() == 0.25
+
+
+# -- minimum dead-ball duration in the decoder -----------------------------------------------------------
+
+def _valid_min_dead(path, k):
+    """D runs must last >= k frames, except one touching the start or the end of the half."""
+    path = list(path)
+    i, n = 0, len(path)
+    while i < n:
+        if path[i] == 2:
+            j = i
+            while j < n and path[j] == 2:
+                j += 1
+            if i > 0 and j < n and j - i < k:
+                return False
+            i = j
+        else:
+            i += 1
+    return True
+
+
+def test_viterbi_with_min_dead_finds_the_constrained_optimum():
+    rng = np.random.default_rng(1)
+    for _ in range(25):
+        T, k = 8, 3
+        scores = rng.normal(size=(T, 3))
+        prm = rng.uniform(0, 3, 3)
+        best = max(_path_score(scores, np.array(p), *prm)
+                   for p in itertools.product(range(3), repeat=T) if _valid_min_dead(p, k))
+        path = decode.viterbi(scores, *prm, min_dead=k)
+        assert _valid_min_dead(path, k)
+        assert _path_score(scores, path, *prm) == pytest.approx(best)
+
+
+def test_min_dead_closes_the_dead_ball_shortcut_between_possessions():
+    """With switch > stop + restart, an unconstrained Viterbi hands possession over through a
+    one-frame fake stoppage; with a minimum dead duration it switches directly. (decode() now
+    refuses such costs outright; this checks the Viterbi itself.)"""
+    n = 400
+    p_home = np.where(np.arange(n) < 200, 0.95, 0.05)
+    scores = decode.emissions(np.full(n, 0.02), p_home, 1.0, 1.0)
+    loose = decode.viterbi(scores, 96, 32, 32, min_dead=1)
+    assert 2 in set(loose.tolist())                            # the shortcut
+    strict = decode.viterbi(scores, 96, 32, 32, min_dead=25)
+    assert set(strict.tolist()) == {0, 1}
+
+
+def test_decoder_rejects_costs_that_make_a_stoppage_the_cheap_hand_over():
+    """A hand-over must be clearly cheaper than stopping and restarting play: at equality a
+    slightly raised P(dead) already turns hand-overs into fake 1 s stoppages."""
+    for bad in (dict(switch=96, stop=32, restart=32), dict(switch=64, stop=32, restart=32)):
+        with pytest.raises(ValueError, match="switch"):
+            decode.decode(np.full(10, 0.1), np.full(10, 0.9), [(0, 10)], 10, bad)
+    decode.decode(np.full(10, 0.1), np.full(10, 0.9), [(0, 10)], 10,
+                  dict(switch=64, stop=40, restart=40))
+
+
+def test_shipped_decoder_hands_over_directly_through_an_uncertain_moment():
+    """Reviewer's scenario: 1 s of coin-flip team evidence and mildly raised P(dead) (0.2) at a
+    hand-over must not become a stoppage."""
+    n = 600
+    t = np.arange(n)
+    p_home = np.where(t < 300, 0.95, 0.05)
+    p_dead = np.full(n, 0.02)
+    around = (t >= 288) & (t < 313)
+    p_home[around] = 0.5
+    p_dead[around] = 0.2
+    labels = decode.decode(p_dead, p_home, [(0, n)], n, config.DECODER)
+    assert "D" not in set(labels)
+
+
+def test_min_dead_viterbi_rejects_non_finite_scores():
+    scores = np.zeros((5, 3))
+    scores[:, 2] = -np.inf
+    with pytest.raises(ValueError, match="finite"):
+        decode.viterbi(scores, 1, 1, 1, min_dead=3)

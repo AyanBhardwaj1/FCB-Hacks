@@ -36,6 +36,8 @@ GB_PARAMS = dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=31, min_sample
 STAGE2_PARAMS = dict(max_iter=200, learning_rate=0.05, max_leaf_nodes=15, min_samples_leaf=400,
                      l2_regularization=1.0, early_stopping=False, random_state=0)
 TRAIN_STRIDE = 4      # frames; neighbouring frames are near-duplicates, so subsample
+SPELL_REF_S = 8.0     # s; possession-equal weights are 1 for a possession this long...
+SPELL_W_LO, SPELL_W_HI = 0.25, 4.0   # ...and clipped to this range
 CONTEXT_S = (0.2, 0.5, 1.0, 2.0, 4.0, 8.0)
 SIDE_S = (0.5, 1.0, 2.0, 4.0)
 EPS = 1e-4
@@ -90,12 +92,32 @@ def context(p_dead, p_home, halves, fps=25):
     return np.column_stack(blocks_d).astype(np.float32), np.column_stack(blocks_h).astype(np.float32)
 
 
+def spell_weights(labels, ref_frames, lo=SPELL_W_LO, hi=SPELL_W_HI):
+    """Per-frame training weight that makes every possession count the same.
+
+    spellF1 scores each possession once, however long it lasts, but a frame-level loss lets a
+    30 s possession outweigh a 3 s one ten to one -- so the model learns to ignore short
+    possessions, which are half of all possessions. Each frame of an H or A run of n frames gets
+    ref_frames / n (a possession of ref_frames keeps weight 1), clipped to [lo, hi] so one
+    two-frame blip cannot dominate. Dead-ball frames keep weight 1; X frames get 0.
+    """
+    labels = np.asarray(labels)
+    w = np.where(labels == "X", 0.0, 1.0)
+    breaks = np.flatnonzero(labels[1:] != labels[:-1]) + 1
+    bounds = np.concatenate(([0], breaks, [len(labels)]))
+    for a, b in zip(bounds[:-1], bounds[1:]):
+        if labels[a] in ("H", "A"):
+            w[a:b] = np.clip(ref_frames / float(b - a), lo, hi)
+    return w
+
+
 class Stage1:
-    def __init__(self, gb_params=None, stride=TRAIN_STRIDE, exclude=None):
+    def __init__(self, gb_params=None, stride=TRAIN_STRIDE, exclude=None, spell_weighting=False):
         self.gb_params = dict(GB_PARAMS, **(gb_params or {}))
         self.stride = stride
         self.exclude = exclude   # regex: feature names to leave out (ablations)
         self.names = None        # (team names, shared names) the models were trained on
+        self.spell_weighting = spell_weighting   # possession-equal weights for the team model
 
     def _matrices(self, feats):
         """(xh, xa, xs), columns picked by name in the order the models were trained on.
@@ -122,11 +144,13 @@ class Stage1:
 
     def fit(self, items):
         """items: [(feats, labels)] where labels is an array of 'H'/'A'/'D'/'X' per frame."""
-        dX, dy, pX, py = [], [], [], []
+        dX, dy, pX, py, pw = [], [], [], [], []
         for feats, labels in items:
             xh, xa, xs = self._matrices(feats)
             sel = np.flatnonzero(np.isin(labels, ["H", "A", "D"]))[::self.stride]
             lab = labels[sel]
+            w_all = spell_weights(labels, SPELL_REF_S * 25) if self.spell_weighting else \
+                np.ones(len(labels))
             d1, d2 = _dead_design(xh[sel], xa[sel], xs[sel])
             dead = (lab == "D").astype(np.int8)
             dX += [d1, d2]
@@ -136,10 +160,11 @@ class Stage1:
             home = (lab[alive] == "H").astype(np.int8)
             pX += [p1, p2]
             py += [home, 1 - home]
+            pw += [w_all[sel][alive]] * 2
         self.dead = HistGradientBoostingClassifier(**self.gb_params).fit(
             np.vstack(dX), np.concatenate(dy))
         self.poss = HistGradientBoostingClassifier(**self.gb_params).fit(
-            np.vstack(pX), np.concatenate(py))
+            np.vstack(pX), np.concatenate(py), sample_weight=np.concatenate(pw))
         return self
 
     def predict(self, feats):
@@ -156,20 +181,23 @@ class FrameModels:
     match, and stage 2 is trained on stage-1 predictions made by models that left that match out.
     """
 
-    def __init__(self, gb_params=None, stride=TRAIN_STRIDE, stage2=False, exclude=None):
+    def __init__(self, gb_params=None, stride=TRAIN_STRIDE, stage2=False, exclude=None,
+                 spell_weighting=False):
         self.gb_params = gb_params
         self.stride = stride
         self.use_stage2 = stage2
         self.exclude = exclude
+        self.spell_weighting = spell_weighting
 
     def fit(self, items):
-        self.stage1 = Stage1(self.gb_params, self.stride, self.exclude).fit([(f, l) for f, l, _, _ in items])
+        self.stage1 = Stage1(self.gb_params, self.stride, self.exclude,
+                             self.spell_weighting).fit([(f, l) for f, l, _, _ in items])
         if not self.use_stage2:
             return self
         groups = sorted({g for _, _, _, g in items})
-        dX, dy, hX, hy = [], [], [], []
+        dX, dy, hX, hy, hw = [], [], [], [], []
         for g in groups:
-            inner = Stage1(self.gb_params, self.stride, self.exclude).fit(
+            inner = Stage1(self.gb_params, self.stride, self.exclude, self.spell_weighting).fit(
                 [(f, l) for f, l, _, gg in items if gg != g])
             for f, l, halves, gg in items:
                 if gg != g:
@@ -186,10 +214,13 @@ class FrameModels:
                 home = (l[alive] == "H").astype(np.int8)
                 hX += [ch[alive], -ch[alive]]
                 hy += [home, 1 - home]
+                w = spell_weights(l, SPELL_REF_S * 25)[alive] if self.spell_weighting else \
+                    np.ones(len(alive))
+                hw += [w, w]
         self.dead2 = HistGradientBoostingClassifier(**STAGE2_PARAMS).fit(
             np.vstack(dX), np.concatenate(dy))
         self.home2 = HistGradientBoostingClassifier(**STAGE2_PARAMS).fit(
-            np.vstack(hX), np.concatenate(hy))
+            np.vstack(hX), np.concatenate(hy), sample_weight=np.concatenate(hw))
         return self
 
     def predict(self, feats, halves):

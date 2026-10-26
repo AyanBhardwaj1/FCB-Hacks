@@ -55,7 +55,7 @@ def main():
     ensure_sample_data()
     t = time.time()
     items = training_items(args.seeds)
-    models = FrameModels().fit(items)
+    models = FrameModels(spell_weighting=config.SPELL_WEIGHTING).fit(items)
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "wb") as fh:
         pickle.dump(models, fh, protocol=4)
