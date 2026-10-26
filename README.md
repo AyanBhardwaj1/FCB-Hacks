@@ -10,10 +10,11 @@ counts how many of the match's real possessions are recovered as whole possessio
 features: ball proximity, touches detected from ball kinematics, who last and next touched or
 controlled the ball, team shape and how it turns over, collective speed, ball out of bounds,
 when the ball last left the pitch or came to rest, kickoff shape. One classifier gives P(dead)
-and the other gives P(Barça | alive). A three-state Viterbi decoder then turns them into clean
-possession intervals, paying a fixed cost for every change of state. That cost is the challenge's "controlled possession" rule written as a
-price: a deflection doesn't pay for a change of possession, sustained control does. **Training
-uses no labels from the competition match.** The models learn from Metrica's three public
+and the other gives P(Barça | alive), trained so every possession counts equally, as it does
+in the score. A three-state Viterbi decoder then turns them into clean possession intervals,
+paying a fixed cost for every change of state. That cost is the challenge's "controlled
+possession" rule written as a price: a deflection doesn't pay for a change of possession,
+sustained control does. **Training uses no labels from the competition match.** The models learn from Metrica's three public
 sample games. Their events give frame labels, and their tracking is degraded to look like the
 challenge's automatic ATD (ball missing ~41% of the time in bursts, track fragments, noise). Full
 write-up: [docs/TECHNICAL.md](docs/TECHNICAL.md).
@@ -27,7 +28,7 @@ design decision looked at), scored with the challenge's own `possession_metrics.
 | method | spellF1 | macroF1 | spellF1, harsh degradation |
 |---|---|---|---|
 | challenge baseline idea (nearest player, ±2 s majority vote) | ~0.20 | ~0.46 | — |
-| **this pipeline** | **0.731 ± 0.012** | **0.904** | **0.687 ± 0.023** |
+| **this pipeline** | **0.758 ± 0.014** | **0.904** | **0.699 ± 0.015** |
 
 The baseline's ~0.20 here is close to its 0.2433 on the real match, which suggests the degraded
 sample games are a fair stand-in. These are **not** competition scores. The real number only
@@ -78,6 +79,7 @@ scripts/evaluate.py     leave-one-game-out evaluation with paired comparisons (-
 scripts/crossval.py     decoder-cost sweep on out-of-fold probabilities
 scripts/error_analysis.py   transition-level error breakdown and oracle upper bounds
 scripts/dead_analysis.py    dead-ball breakdown: what stopped play, restart type, duration
+scripts/handover_analysis.py  possession-switch breakdown: how the ball changed hands, spell length
 scripts/make_fake_bundle.py   challenge-format stand-in data for smoke tests
 external/more-than-a-hack-2027   the challenge repo (git submodule): scorer, games.py
 tests/                  python -m pytest -q

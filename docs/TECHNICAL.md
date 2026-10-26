@@ -51,12 +51,25 @@ ATD (tracking) ──► per-frame features ──► P(dead), P(home | alive) �
    points of view (label flipped), and at prediction P(H) = ½·(f(home view) + 1 − f(away view)).
    Swapping the two teams' tracking swaps the answer exactly (unit-tested), so nothing about "the
    home side" carries over from training. Models store the feature names they were trained on and
-   refuse any other feature set.
+   refuse any other feature set. **Possession-equal weights**: spellF1 counts every possession
+   once, but a frame-level loss lets a 30 s possession outweigh a 3 s one ten to one, and short
+   possessions are half of all possessions. So each training frame of the team model is weighted
+   by 8 s ÷ its possession's length, clipped to [0.25, 4], and every possession counts about the
+   same, as it does in the score. The dead-ball model stays unweighted.
 3. **Decoder**: Viterbi over states H/A/D per half, with emissions from tempered
    log-probabilities and fixed costs for every H↔A switch, every stop (→D) and every restart
    (D→). This is the challenge's *controlled possession* rule written as a price. A deflection
    or a won header (a few frames of evidence for the other team) doesn't pay for a switch.
-   Sustained control does. Outside the two graded halves we write `X`.
+   Sustained control does. Outside the two graded halves we write `X`. Two structural rules
+   keep the dead-ball state honest:
+   - A stoppage lasts at least 1 s (`min_dead`; 1 in 850 real ones is shorter). This is an
+     exact Viterbi, O(1) per frame, checked against brute force.
+   - A hand-over must cost at least 16 less than stopping and restarting play
+     (`switch ≤ stop + restart − 16`; `decode()` refuses other costs).
+
+   Without these the decoder can hand possession over through a fake stoppage. D frames belong to
+   no possession, so that flatters spellF1 on paper while labelling live play dead. One decoder
+   sweep did exactly that: with switch 96 > 32 + 32 it made zero direct switches.
 
 Why this rather than smoothing: the published baseline (nearest player + majority vote) has no
 notion of a dead ball beyond "ball not seen" and no notion of an interval. Our validation shows
@@ -120,7 +133,41 @@ choosing between designs, and each round's final numbers come from a seed range 
 looked at (201–203, then 301–303). Comparisons are **paired** on identical test units, and every
 arm of a comparison is evaluated with the current degradation code.
 
-**Current pipeline vs the previous one, on fresh seeds 301–303.** "Before" = touch and turnover
+**Round 4, possession hand-overs, on fresh seeds 401–403.** "Before" = the round-3 pipeline
+(decoder `a_dead 0.75, a_team 2, switch 48, stop 32, restart 32`). "After" (shipped) = plus
+possession-equal training weights, the 1 s minimum stoppage, and the margin rule, with decoder
+`switch 64, stop 40, restart 40`, chosen on seed 100 under those rules:
+
+| seeds 401–403 | default spellF1 | harsh spellF1 | default macroF1 | harsh macroF1 |
+|---|---|---|---|---|
+| before | 0.741 ± 0.017 | 0.681 ± 0.020 | 0.905 | 0.884 |
+| **after (shipped)** | **0.758 ± 0.014** | **0.699 ± 0.015** | **0.904** | **0.884** |
+
+Paired after − before: **+0.016 ± 0.003** spellF1 on default (better on 9/9 units) and
+**+0.019 ± 0.005** on harsh (8/9). macroF1 is unchanged (−0.001 ± 0.001).
+
+| default scenario, 2 s window | before | after |
+|---|---|---|
+| possession switches found / invented | 60% / 200 | **63%** / 241 |
+| switches into a possession < 3 s / 3–8 s found | 32% / 57% | **38% / 62%** |
+| fake stoppages at hand-overs (predicted D with no true D) | 61 | 65 |
+| stops found / invented | 70% / 286 | 71% / 278 |
+
+How the round went:
+- Diagnosis: possessions over 8 s were already 96% right. On possessions under 8 s that were
+  mostly mislabelled, the frame model gave the new team only 0.26–0.30, so the misses were the
+  model's, not the decoder's. The loss/metric mismatch above explained it.
+- The first decoder tune for the weighted model picked switch 96 on seed 100. It turned out to
+  win by routing hand-overs through fake stoppages: 451 invented stops instead of about 280, and
+  fewer direct switches found (50%). Hence the minimum stoppage and the margin rule. Independent
+  review then showed the first version of the rule (equality allowed) still let a mildly raised
+  P(dead) turn a hand-over into a stoppage (86 fake stoppages on the design seeds), so the
+  margin of 16 was added.
+- The decoder choice was made on seed 100 and the design seeds 101–103. The fresh-seed run was
+  first scored with an intermediate decoder (`switch 64, stop/restart 32`: +0.015 / +0.020) and
+  then re-decoded with the final one, with no retraining. The table shows the final one.
+
+**Round 3, dead-ball boundaries, on fresh seeds 301–303.** "Before" = touch and turnover
 features, fixed training noise, decoder `a_team 2, switch 48, stop 32, restart 32`. "After" (shipped)
 = plus dead-ball boundary features, randomized training noise, decoder `a_dead 0.75` with the
 same costs. Both use four training seeds per game:
@@ -182,8 +229,9 @@ Other findings:
 ## 5. Possession rules implemented
 
 - A change of possession needs sustained evidence of control by the other team (decoder switch
-  cost 48 at team weight 2, about 0.5–1 s of clear evidence).
-- Stops and restarts cost 32 each, with the dead-ball evidence weighted 0.75.
+  cost 64 at team weight 2, about 0.5–1 s of clear evidence).
+- Stops and restarts cost 40 each, with the dead-ball evidence weighted 0.75. A stoppage lasts
+  at least 1 s, and a hand-over is never routed through a stoppage to save cost (see §1).
 - Loose and contested balls stay with the last team in control (no evidence ⇒ no switch).
 - Dead ball: evidence from the ball outside the lines, a still and unattended ball, collective
   slowdown, long ball gaps and the kickoff shape. Restarts begin a new possession.
@@ -203,11 +251,13 @@ Other findings:
   ground truth is derived from Metrica's corrected tracking, so the semantics differ at the margins.
 - Ball dropout and dead-ball paths in training are simulated. The real ATD's error pattern
   (identity switches, duplicates, systematic loss in aerial play) is only approximated.
-- Short possessions (< 4 s) are mostly missed, partly by design: the switch cost suppresses them.
+- Short possessions are still the weak spot: only 38% of switches into a possession under 3 s
+  are found within 2 s, partly by design (the switch cost suppresses them).
 - The dead-ball paths are simulated (randomized, but simulated). How well the boundary
   features transfer depends on how the real ATD sees an out-of-play ball, which the sample data
   cannot show.
-- Next steps: possession hand-overs (still the largest gap to the oracle), a touch detector
+- Next steps: possession hand-overs (still the largest gap: perfect team labels would give
+  ≈ 0.93), features aimed at short possessions (interception-then-loss sequences), a touch detector
   whose threshold adapts to the measured ball noise, pseudo-labelling the challenge match itself
   (allowed, as long as no person decides labels), ball detection in tracker gaps from video, and
   a duration-aware (semi-Markov) decoder.

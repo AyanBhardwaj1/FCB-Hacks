@@ -44,7 +44,8 @@ def run(args):
     for held in sample_games.GAMES:
         train = [unit_features(g, s, args.train_scenario) + (g,)
                  for g in sample_games.GAMES if g != held for s in args.train_seeds]
-        models = FrameModels(stage2=args.stage2, exclude=args.exclude).fit(train)
+        models = FrameModels(stage2=args.stage2, exclude=args.exclude,
+                             spell_weighting=args.spell_weighting).fit(train)
         del train
         for scenario in args.scenarios:
             for seed in args.test_seeds:
@@ -59,8 +60,11 @@ def run(args):
                 print("  {:<7} game {} seed {}: spellF1 {:.4f}  macroF1 {:.4f}  ({}/{} spells)"
                       .format(scenario, held, seed, spell, macro, n_pred, n_gt), flush=True)
     os.makedirs(EVAL_DIR, exist_ok=True)
+    # record the fully resolved decoder, not just the overrides: config can change later, and
+    # the analysis scripts re-decode with whatever a run records
+    run_args = dict(vars(args), decoder=dict(config.DECODER, **(args.decoder or {})))
     with open(os.path.join(EVAL_DIR, args.tag + ".json"), "w") as fh:
-        json.dump(dict(args=vars(args), code=CODE_HASH, units=units), fh, indent=1)
+        json.dump(dict(args=run_args, code=CODE_HASH, units=units), fh, indent=1)
     with open(os.path.join(EVAL_DIR, args.tag + "_probs.pkl"), "wb") as fh:
         pickle.dump(probs, fh, protocol=4)
     summarize(units, args.tag)
@@ -129,6 +133,11 @@ def main():
                     help="degradation of the training games: 'train' randomizes the noise "
                          "per seed, 'default' pins it (the setting before randomization)")
     ap.add_argument("--exclude", help="regex of feature names to leave out")
+    ap.add_argument("--spell-weighting", dest="spell_weighting", action="store_true",
+                    default=config.SPELL_WEIGHTING,
+                    help="possession-equal training weights for the team model (default: as "
+                         "shipped, config.SPELL_WEIGHTING)")
+    ap.add_argument("--no-spell-weighting", dest="spell_weighting", action="store_false")
     ap.add_argument("--stage2", action="store_true")
     ap.add_argument("--decoder", type=json.loads, default=None,
                     help='decoder costs as JSON, e.g. \'{"switch": 16}\' (default: config)')

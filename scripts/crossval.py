@@ -26,7 +26,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "external", "more-than-a-hack-2027", "evaluation"))
 
 from common import score, unit_features  # noqa: E402
-from mtah import decode, sample_games  # noqa: E402
+from mtah import config, decode, sample_games  # noqa: E402
 from mtah.model import FrameModels  # noqa: E402
 
 def nearest_baseline(feats, halves, n, window=50):
@@ -53,6 +53,11 @@ def main():
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--stage2", action="store_true", help="add the stage-2 context model")
     ap.add_argument("--exclude", help="regex of feature names to leave out")
+    ap.add_argument("--spell-weighting", dest="spell_weighting", action="store_true",
+                    default=config.SPELL_WEIGHTING,
+                    help="possession-equal training weights for the team model (default: as "
+                         "shipped, config.SPELL_WEIGHTING)")
+    ap.add_argument("--no-spell-weighting", dest="spell_weighting", action="store_false")
     ap.add_argument("--train-scenario", default="train")
     ap.add_argument("--oof", default=os.path.join(ROOT, "cache", "oof.pkl"))
     ap.add_argument("--train-seeds", type=int, nargs="+", default=[1, 2])
@@ -73,7 +78,8 @@ def main():
         train = [data[(g, s)] + (g,) for g in sample_games.GAMES if g != held
                  for s in train_seeds]
         t = time.time()
-        models = FrameModels(stage2=args.stage2, exclude=args.exclude).fit(train)
+        models = FrameModels(stage2=args.stage2, exclude=args.exclude,
+                             spell_weighting=args.spell_weighting).fit(train)
         feats, labels, halves = data[(held, args.test_seed)]
         p_dead, p_home = models.predict(feats, halves)
         oof[held] = (p_dead, p_home, labels, halves)
@@ -100,7 +106,9 @@ def main():
     rows = []
     keys = list(grid)
     for combo in itertools.product(*[grid[k] for k in keys]):
-        prm = dict(zip(keys, combo))
+        prm = dict(zip(keys, combo), min_dead=config.DECODER.get("min_dead", 1))
+        if prm["switch"] > prm["stop"] + prm["restart"] - decode.SWITCH_MARGIN:
+            continue          # decode() refuses these: a stoppage would be the cheap hand-over
         per = []
         for g, (p_dead, p_home, labels, halves) in oof.items():
             pred = decode.decode(p_dead, p_home, halves, len(labels), prm)
