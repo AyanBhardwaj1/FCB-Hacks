@@ -30,7 +30,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
-from common import score, unit_features  # noqa: E402
+from common import CODE_HASH, score, unit_features  # noqa: E402
 from mtah import config, decode, sample_games  # noqa: E402
 from mtah.model import FrameModels  # noqa: E402
 
@@ -42,8 +42,8 @@ def run(args):
     units = []
     probs = {}
     for held in sample_games.GAMES:
-        train = [unit_features(g, s, "default") + (g,) for g in sample_games.GAMES if g != held
-                 for s in args.train_seeds]
+        train = [unit_features(g, s, args.train_scenario) + (g,)
+                 for g in sample_games.GAMES if g != held for s in args.train_seeds]
         models = FrameModels(stage2=args.stage2, exclude=args.exclude).fit(train)
         del train
         for scenario in args.scenarios:
@@ -60,11 +60,37 @@ def run(args):
                       .format(scenario, held, seed, spell, macro, n_pred, n_gt), flush=True)
     os.makedirs(EVAL_DIR, exist_ok=True)
     with open(os.path.join(EVAL_DIR, args.tag + ".json"), "w") as fh:
-        json.dump(dict(args=vars(args), units=units), fh, indent=1)
+        json.dump(dict(args=vars(args), code=CODE_HASH, units=units), fh, indent=1)
     with open(os.path.join(EVAL_DIR, args.tag + "_probs.pkl"), "wb") as fh:
         pickle.dump(probs, fh, protocol=4)
     summarize(units, args.tag)
     print("({:.0f}s)".format(time.time() - t0))
+
+
+def rescore(args):
+    """Re-decode a saved run's probabilities with other decoder costs; no retraining."""
+    src = args.rescore
+    with open(os.path.join(EVAL_DIR, src + ".json")) as fh:
+        run_meta = json.load(fh)
+    if run_meta.get("code") != CODE_HASH:
+        sys.exit("run {!r} was made with different code; re-run it instead".format(src))
+    with open(os.path.join(EVAL_DIR, src + "_probs.pkl"), "rb") as fh:
+        probs = pickle.load(fh)
+    prm = dict(config.DECODER, **(args.decoder or {}))
+    units = []
+    for key, (p_dead, p_home) in sorted(probs.items()):
+        scenario, game, seed = key.split("_")
+        _, labels, halves = unit_features(int(game), int(seed), scenario)
+        pred = decode.decode(p_dead, p_home, halves, len(labels), prm)
+        spell, macro, n_pred, n_gt = score(labels, pred)
+        units.append(dict(scenario=scenario, game=int(game), seed=int(seed), spell=spell,
+                          macro=macro, n_pred=n_pred, n_gt=n_gt))
+    run_args = dict(run_meta["args"], decoder=prm, rescored_from=src)
+    with open(os.path.join(EVAL_DIR, args.tag + ".json"), "w") as fh:
+        json.dump(dict(args=run_args, code=CODE_HASH, units=units), fh, indent=1)
+    with open(os.path.join(EVAL_DIR, args.tag + "_probs.pkl"), "wb") as fh:
+        pickle.dump(probs, fh, protocol=4)
+    summarize(units, args.tag)
 
 
 def summarize(units, tag):
@@ -99,14 +125,21 @@ def main():
                     help="degradation seeds of the held-out games; 100 is reserved for tuning "
                          "the decoder in crossval.py")
     ap.add_argument("--scenarios", nargs="+", default=["default", "harsh"])
+    ap.add_argument("--train-scenario", default="train",
+                    help="degradation of the training games: 'train' randomizes the noise "
+                         "per seed, 'default' pins it (the setting before randomization)")
     ap.add_argument("--exclude", help="regex of feature names to leave out")
     ap.add_argument("--stage2", action="store_true")
     ap.add_argument("--decoder", type=json.loads, default=None,
                     help='decoder costs as JSON, e.g. \'{"switch": 16}\' (default: config)')
     ap.add_argument("--compare", nargs=2, metavar=("A", "B"))
+    ap.add_argument("--rescore", metavar="RUN",
+                    help="re-decode saved run RUN with --decoder / config costs, save as --tag")
     args = ap.parse_args()
     if args.compare:
         compare(*args.compare)
+    elif args.rescore:
+        rescore(args)
     else:
         run(args)
 

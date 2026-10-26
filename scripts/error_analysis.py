@@ -19,7 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
-from common import score, unit_features  # noqa: E402
+from common import CODE_HASH, score, unit_features  # noqa: E402
 from evaluate import EVAL_DIR  # noqa: E402
 from mtah import config, decode  # noqa: E402
 
@@ -40,7 +40,11 @@ def main(tag, scenario="default"):
     probs = pickle.load(open(os.path.join(EVAL_DIR, tag + "_probs.pkl"), "rb"))
     # decode exactly as that evaluation run did
     with open(os.path.join(EVAL_DIR, tag + ".json")) as fh:
-        run_args = json.load(fh)["args"]
+        run = json.load(fh)
+    run_args = run["args"]
+    if run.get("code") != CODE_HASH:
+        sys.exit("run {!r} was made with different code (or before runs recorded it); its "
+                 "probabilities do not match today's degraded data -- re-run evaluate.py".format(tag))
     prm = dict(config.DECODER, **(run_args.get("decoder") or {}))
     stats = {k: dict(n_gt=0, found=0, spurious=0, offsets=[]) for k in ("switch", "stop", "restart")}
     oracle = {"model": [], "oracle_dead": [], "oracle_team": []}

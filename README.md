@@ -9,9 +9,9 @@ counts how many of the match's real possessions are recovered as whole possessio
 **How it works, in one paragraph.** Gradient-boosted frame classifiers read team-level tracking
 features: ball proximity, touches detected from ball kinematics, who last and next touched or
 controlled the ball, team shape and how it turns over, collective speed, ball out of bounds,
-kickoff shape. One classifier gives P(dead) and the other gives
-P(Barça | alive). A three-state Viterbi decoder then turns them into clean possession intervals, paying a fixed cost
-for every change of state. That cost is the challenge's "controlled possession" rule written as a
+when the ball last left the pitch or came to rest, kickoff shape. One classifier gives P(dead)
+and the other gives P(Barça | alive). A three-state Viterbi decoder then turns them into clean
+possession intervals, paying a fixed cost for every change of state. That cost is the challenge's "controlled possession" rule written as a
 price: a deflection doesn't pay for a change of possession, sustained control does. **Training
 uses no labels from the competition match.** The models learn from Metrica's three public
 sample games. Their events give frame labels, and their tracking is degraded to look like the
@@ -27,7 +27,7 @@ design decision looked at), scored with the challenge's own `possession_metrics.
 | method | spellF1 | macroF1 | spellF1, harsh degradation |
 |---|---|---|---|
 | challenge baseline idea (nearest player, ±2 s majority vote) | ~0.20 | ~0.46 | — |
-| **this pipeline** | **0.720 ± 0.015** | **0.899** | **0.615 ± 0.032** |
+| **this pipeline** | **0.731 ± 0.012** | **0.904** | **0.687 ± 0.023** |
 
 The baseline's ~0.20 here is close to its 0.2433 on the real match, which suggests the degraded
 sample games are a fair stand-in. These are **not** competition scores. The real number only
@@ -77,6 +77,7 @@ mtah/sample_games.py    Metrica sample games: event-derived labels, ATD-like deg
 scripts/evaluate.py     leave-one-game-out evaluation with paired comparisons (--compare A B)
 scripts/crossval.py     decoder-cost sweep on out-of-fold probabilities
 scripts/error_analysis.py   transition-level error breakdown and oracle upper bounds
+scripts/dead_analysis.py    dead-ball breakdown: what stopped play, restart type, duration
 scripts/make_fake_bundle.py   challenge-format stand-in data for smoke tests
 external/more-than-a-hack-2027   the challenge repo (git submodule): scorer, games.py
 tests/                  python -m pytest -q

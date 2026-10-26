@@ -53,6 +53,7 @@ def main():
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--stage2", action="store_true", help="add the stage-2 context model")
     ap.add_argument("--exclude", help="regex of feature names to leave out")
+    ap.add_argument("--train-scenario", default="train")
     ap.add_argument("--oof", default=os.path.join(ROOT, "cache", "oof.pkl"))
     ap.add_argument("--train-seeds", type=int, nargs="+", default=[1, 2])
     ap.add_argument("--test-seed", type=int, default=100)
@@ -63,7 +64,8 @@ def main():
     data = {}
     for g in sample_games.GAMES:
         for s in train_seeds + [args.test_seed]:
-            data[(g, s)] = unit_features(g, s)
+            scenario = args.train_scenario if s in train_seeds else "default"
+            data[(g, s)] = unit_features(g, s, scenario)
     print("features ready in {:.0f}s".format(time.time() - t0))
 
     oof = {}
@@ -91,8 +93,8 @@ def main():
         print("game {}: dead acc {:.3f}  team acc (alive) {:.3f}   baseline50 spellF1 {:.3f} "
               "macroF1 {:.3f}".format(g, dead_acc, team_acc, b[0], b[1]))
 
-    grid = dict(a_team=[1.0, 2.0, 3.0], switch=[16, 32, 48, 64, 96],
-                stop=[16, 32], restart=[16, 32])
+    grid = dict(a_dead=[0.75, 1.0, 1.5], a_team=[2.0, 3.0], switch=[32, 48, 64, 96],
+                stop=[16, 32, 48], restart=[16, 32, 48])
     if args.quick:
         grid = dict(a_team=[1.0], switch=[8, 16, 32, 64], stop=[8, 16, 32], restart=[8, 16, 32])
     rows = []

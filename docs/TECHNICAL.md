@@ -15,7 +15,7 @@ ATD (tracking) ──► per-frame features ──► P(dead), P(home | alive) �
                                             trained on OTHER matches     restart costs
 ```
 
-1. **Features** (108 per frame: 71 seen from each team's side plus 37 shared, i.e. 179 model
+1. **Features** (120 per frame: 71 seen from each team's side plus 49 shared, i.e. 191 model
    columns for the dead-ball model; team-level only, since the ATD has no player identities):
    - ball: seen / interpolated, length of the current gap, speed, distance outside the pitch
      lines, distance to touchline, corner and centre spot
@@ -36,6 +36,15 @@ ATD (tracking) ──► per-frame features ──► P(dead), P(home | alive) �
      velocity towards each team's attacking goal before and after the frame
    - activity: mean player speed (1/3/6 s) relative to the match median, share of fast players,
      block motion; kickoff shape (both teams entirely in their own halves)
+   - **dead-ball boundaries**, one-sided in time so the decoder can place a stop or restart to
+     the frame instead of at the blurred edge of a centred window: time since / until the ball
+     was last outside the lines; time since / until it was last still, with "still" judged from
+     the displacement between half-second windows (a frame-to-frame speed reads 2–4 m/s for a
+     resting ball on noisy tracking); *projected exit*, i.e. how long ago the ball's last-seen
+     straight path crossed a line, which locates the stop even when the tracker loses the ball
+     on its way out; ball speed over the next vs previous 1–2 s (a restart kicks a still ball);
+     collective player speed over the next 1–2 s minus the previous (players ease off at the
+     whistle)
    - centred 0.5/1/3 s rolling means of the main ones (offline, so non-causal windows are fine)
 2. **Two classifiers** (scikit-learn `HistGradientBoostingClassifier`, NaN-native): P(dead)
    and P(home | alive). **Exact team symmetry**: each training frame is used from both teams'
@@ -83,10 +92,18 @@ published events**. No person labelled anything for this project:
   "no ball ⇒ dead ball", which is false for the challenge ATD. Each dead stretch therefore gets a
   plausible synthetic ball path (drifts on over the line, is carried to the restart spot, sits
   still there before the restart), and the few short gaps in live play are interpolated. Then all
-  of it goes through the same label-free dropout
-- players drop out in bursts (≈20 of 22 tracked on average, vs 20.5 in the challenge), and tracks
-  are cut into fragments packed into slots. Positional noise is added to players and ball, plus
-  0.2% false ball detections. A speed channel is synthesised, since the challenge ATD has one
+  of it goes through the same label-free dropout. Each stretch gets its own shape: how fast the
+  ball slows (time constant 0.2–1 s), how long it drifts (0.5–2.5 s), and whether it rests
+  before the restart at all (no in 30% of stretches, else 1–4 s). With one fixed template, the
+  one-sided "still ball" features could learn the template's timing instead of football
+- players drop out in bursts, and tracks are cut into fragments packed into slots. Positional
+  noise is added to players and ball, plus false ball detections. A speed channel is
+  synthesised, since the challenge ATD has one
+- **the noise level is randomized per training seed** (`sample_games.PARAM_RANGES`): ball noise
+  0.15–0.50 m, player noise 0.05–0.25 m, player dropout 4–12%, false ball detections
+  0.1–0.5% of frames, track fragments every 15–60 s. The real ATD's noise level is unknown, and a
+  model trained at one fixed level learns thresholds (a still ball, a touch) that break when the
+  data is noisier. The evaluation scenarios pin their values, so results stay comparable
 
 Four degradation seeds per game form the training set.
 
@@ -98,51 +115,59 @@ under three unseen degradation seeds and two scenarios with the challenge's own
 challenge ATD. `harsh` is a robustness check that is worse than we expect the real data to be:
 55% ball missing (vs 36–46%), 15% player dropout (vs 7%), ball noise 0.5 m (vs 0.25),
 player noise 0.25 m (vs 0.10), 3× false ball detections, track fragments every 15 s (vs 40 s).
-Seeds are kept apart by role: 100 tunes decoder costs (`scripts/crossval.py`, run for each
-feature set), 101–103 were used to choose between designs, and 201–203 report the final numbers.
-Comparisons are **paired** on identical test units.
+Seeds are kept apart by role: 100 tunes decoder costs (`scripts/crossval.py`), 101–103 are for
+choosing between designs, and each round's final numbers come from a seed range no decision has
+looked at (201–203, then 301–303). Comparisons are **paired** on identical test units, and every
+arm of a comparison is evaluated with the current degradation code.
 
-Final numbers, on **fresh degradation seeds 201–203**, which no decision ever looked at. Both
-arms use the same decoder (`a_team 2, switch 48, stop 32, restart 32`; it is within 0.002 of each
-arm's own best on seed 100) and four training seeds per game:
+**Current pipeline vs the previous one, on fresh seeds 301–303.** "Before" = touch and turnover
+features, fixed training noise, decoder `a_team 2, switch 48, stop 32, restart 32`. "After" (shipped)
+= plus dead-ball boundary features, randomized training noise, decoder `a_dead 0.75` with the
+same costs. Both use four training seeds per game:
 
-| leak-free degradation, seeds 201–203 | default spellF1 | harsh spellF1 | default macroF1 |
-|---|---|---|---|
-| baseline idea (nearest player, ±50-frame vote) | ≈ 0.20 | — | ≈ 0.46 |
-| v1 features (no touches / turnover signatures) | 0.695 ± 0.019 | 0.612 ± 0.033 | 0.890 |
-| **v2 features (shipped)** | **0.720 ± 0.015** | **0.615 ± 0.032** | **0.899** |
+| seeds 301–303 | default spellF1 | harsh spellF1 | default macroF1 | harsh macroF1 |
+|---|---|---|---|---|
+| baseline idea (nearest player, ±50-frame vote) | ≈ 0.20 | — | ≈ 0.46 | — |
+| before | 0.726 ± 0.016 | 0.625 ± 0.029 | 0.900 | 0.844 |
+| **after (shipped)** | **0.731 ± 0.012** | **0.687 ± 0.023** | **0.904** | **0.887** |
 
-± is the spread (sd) over the 9 units. Paired differences v2 − v1 (mean ± standard error):
-**+0.025 ± 0.005** spellF1 on default, better on 9 of 9 units; +0.004 ± 0.005 on harsh, which is
-no measurable gain. The touch detector thresholds a change in ball velocity, so doubled ball
-noise drowns it. Making the threshold adapt to the measured noise is an obvious next step.
+± is the spread (sd) over the 9 units. Paired differences after − before (mean ± standard error):
++0.005 ± 0.006 spellF1 on default (no measurable change, better on 4/9); **+0.061 ± 0.011** on
+harsh (9/9). macroF1 +0.004 ± 0.002 on default (7/9), +0.043 ± 0.007 on harsh (9/9).
 
-How the choices were made, honestly: the v2 feature set and the four training seeds were picked
-by comparing arms on seeds 101–103 (v2 − v1 there: +0.040 ± 0.004; 4 − 2 seeds: +0.002 on
-default, +0.012 on harsh). Those runs still had the dead-ball jitter leak described in §2, which
-flattered the touch features. The fresh-seed table above is the number to quote.
+Dead-ball boundaries specifically (`scripts/error_analysis.py`, 2 s matching window):
 
-Error analysis (`scripts/error_analysis.py`, default scenario, 2 s matching window):
-
-| | v1 | v2 |
+| | default before → after | harsh before → after |
 |---|---|---|
-| possession switches found / invented | 53% / 244 | **57% / 231** |
-| median timing of found switches | +5 frames | **+2 frames** |
-| stops found / invented | 66% / 389 | 68% / 342 |
-| restarts found / invented | 77% / 298 | 76% / 275 |
-| spellF1 with perfect team labels (oracle) | 0.920 | 0.923 |
-| spellF1 with perfect dead-ball labels (oracle) | 0.768 | 0.785 |
+| stops found / invented | 66% / 319 → **70% / 277** | 51% / 435 → **64% / 330** |
+| restarts found / invented | 75% / 244 → **76% / 227** | 49% / 452 → **70% / 281** |
+| restart timing, \|offset\| p75 | 16 → **11** frames | 26 → **17** frames |
+| possession switches found / invented | 59% / 232 → 60% / 228 | |
+| spellF1, perfect team labels (oracle) | 0.925 → 0.930 | |
+| spellF1, perfect dead-ball labels (oracle) | 0.793 → 0.794 | |
 
-Team hand-overs remain where most of the score is: 43% of true switches are still missed.
+Reading it: dead-ball detection got measurably sharper, but on realistic noise each fixed
+boundary moves possession overlap only slightly, so spellF1 barely moves. Most of the gain is
+robustness. Randomizing the training noise alone was worth +0.057 ± 0.006 spellF1 on harsh with
+no cost on default (design seeds 101–103), and the boundary features added about +0.014 on top.
+On the design seeds the boundary features also showed +0.007 ± 0.003 on default. That gain
+largely disappeared once review found they could key on the timing of a single synthetic
+dead-ball template, which is now randomized (§2). Team hand-overs remain the big gap: 40% of
+true possession switches are still missed.
+
+History, for honesty:
+- Round 2 (touch and turnover features) on fresh seeds 201–203: spellF1 0.720 vs 0.695 before
+  them, +0.025 ± 0.005 (9/9), with no gain on harsh. That was the shipped pipeline before this
+  round.
+- Numbers in earlier versions of this document (0.688, then 0.734) came from degradations with
+  label leaks: dropout clipped to alive/dead regions, then extra jitter on synthetic dead-ball
+  paths. Both were found in independent review and are not comparable.
 
 Other findings:
 - The baseline's ≈0.20 here is close to its published 0.2433 on the real match. This is the
   main evidence that the degradation is realistic.
 - Rejected after measurement: a stage-2 model over windowed stage-1 probabilities (no gain), and
   Smart Tagging priors (±0.01 depending on simulated tag noise).
-- Numbers in earlier versions of this document (0.688, then 0.734) came from degradations with
-  label leaks: dropout clipped to alive/dead regions, then extra jitter on synthetic dead-ball
-  paths. Both were found in independent review. They are not comparable to the table above.
 - The public 5-minute window was **not** used to choose anything.
 
 ## 4. Assets used and dropped
@@ -158,6 +183,7 @@ Other findings:
 
 - A change of possession needs sustained evidence of control by the other team (decoder switch
   cost 48 at team weight 2, about 0.5–1 s of clear evidence).
+- Stops and restarts cost 32 each, with the dead-ball evidence weighted 0.75.
 - Loose and contested balls stay with the last team in control (no evidence ⇒ no switch).
 - Dead ball: evidence from the ball outside the lines, a still and unattended ball, collective
   slowdown, long ball gaps and the kickoff shape. Restarts begin a new possession.
@@ -178,9 +204,13 @@ Other findings:
 - Ball dropout and dead-ball paths in training are simulated. The real ATD's error pattern
   (identity switches, duplicates, systematic loss in aerial play) is only approximated.
 - Short possessions (< 4 s) are mostly missed, partly by design: the switch cost suppresses them.
-- Next steps: dead-ball detection (the oracle says ≈ +0.08 is available there), pseudo-labelling
-  the challenge match itself (allowed, as long as no person decides labels), ball detection in
-  tracker gaps from video, and a duration-aware (semi-Markov) decoder.
+- The dead-ball paths are simulated (randomized, but simulated). How well the boundary
+  features transfer depends on how the real ATD sees an out-of-play ball, which the sample data
+  cannot show.
+- Next steps: possession hand-overs (still the largest gap to the oracle), a touch detector
+  whose threshold adapts to the measured ball noise, pseudo-labelling the challenge match itself
+  (allowed, as long as no person decides labels), ball detection in tracker gaps from video, and
+  a duration-aware (semi-Markov) decoder.
 
 ## 8. Reproduction
 
