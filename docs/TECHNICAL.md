@@ -133,6 +133,29 @@ choosing between designs, and each round's final numbers come from a seed range 
 looked at (201–203, then 301–303). Comparisons are **paired** on identical test units, and every
 arm of a comparison is evaluated with the current degradation code.
 
+**Round 5, short possessions: no change shipped (design seeds 101–103).** The shipped pipeline
+recovers 52% of possessions under 8 s (IoU ≥ 0.5): 27% under 2 s, 41% at 2–4 s, 70% at 4–8 s
+(`scripts/short_analysis.py`). The anatomy points at the tracking, not the model or decoder:
+46% of short possessions contain no touch the detector can find for the possessing team, and
+those are recovered 33% of the time, against 60–84% when it finds one or more. Ball visibility
+under 30% inside the possession: 27%.
+
+Two attempts, both measured paired against the shipped pipeline:
+1. **Sequence features**: completed passes (consecutive same-team touches ≥ 5 m apart, 97% of
+   them inside the passing team's own possession) and steals from the touch sequence, plus the
+   nearest team's margin at the last and next ball sighting around a tracker gap. Result: spellF1
+   +0.001 ± 0.003 (default), −0.000 ± 0.004 (harsh). The existing touch features already carry
+   this, so the features were removed again.
+2. **Hand-over detector**: a third classifier, P(direct possession change within ± 0.5 s),
+   team-symmetric (P near true hand-overs 0.19–0.25 vs 0.03 elsewhere). The decoder's switch cost
+   drops where it fires (`decode.switch_costs`, per-frame switch costs in an exact Viterbi).
+   An oracle (cheap switches only near *true* hand-overs) shows +0.034 is available. The real
+   detector, tuned on seed 100 (+0.010 there), raised recovery of possessions under 8 s from 52%
+   to 58% and switches found from 62% to 68%, but invented 83 more switches. On the design seeds
+   spellF1 was +0.002 ± 0.004 (default) and −0.006 ± 0.003 (harsh, worse on 8/9). Gentler settings
+   were +0.003 ± 0.003 at best. It stays in the code as an opt-in (`config.HAND_OVER`,
+   `--hand-over`), off by default. The shipped model and submission are unchanged.
+
 **Round 4, possession hand-overs, on fresh seeds 401–403.** "Before" = the round-3 pipeline
 (decoder `a_dead 0.75, a_team 2, switch 48, stop 32, restart 32`). "After" (shipped) = plus
 possession-equal training weights, the 1 s minimum stoppage, and the margin rule, with decoder
@@ -251,13 +274,16 @@ Other findings:
   ground truth is derived from Metrica's corrected tracking, so the semantics differ at the margins.
 - Ball dropout and dead-ball paths in training are simulated. The real ATD's error pattern
   (identity switches, duplicates, systematic loss in aerial play) is only approximated.
-- Short possessions are still the weak spot: only 38% of switches into a possession under 3 s
-  are found within 2 s, partly by design (the switch cost suppresses them).
+- Short possessions are still the weak spot (52% of those under 8 s recovered), and round 5
+  suggests the sample-game tracking often holds no evidence of them: nearly half contain no
+  detectable touch by the possessing team. Better ball detection in tracker gaps (from video)
+  is the likeliest way in.
 - The dead-ball paths are simulated (randomized, but simulated). How well the boundary
   features transfer depends on how the real ATD sees an out-of-play ball, which the sample data
   cannot show.
 - Next steps: possession hand-overs (still the largest gap: perfect team labels would give
-  ≈ 0.93), features aimed at short possessions (interception-then-loss sequences), a touch detector
+  ≈ 0.93), a hand-over detector precise enough to beat its false switches (the oracle says
+  +0.03 is there), a touch detector
   whose threshold adapts to the measured ball noise, pseudo-labelling the challenge match itself
   (allowed, as long as no person decides labels), ball detection in tracker gaps from video, and
   a duration-aware (semi-Markov) decoder.

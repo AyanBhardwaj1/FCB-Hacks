@@ -44,19 +44,21 @@ def run(args):
     for held in sample_games.GAMES:
         train = [unit_features(g, s, args.train_scenario) + (g,)
                  for g in sample_games.GAMES if g != held for s in args.train_seeds]
-        models = FrameModels(stage2=args.stage2, exclude=args.exclude,
+        models = FrameModels(stage2=args.stage2, exclude=args.exclude, hand_over=args.hand_over,
                              spell_weighting=args.spell_weighting).fit(train)
         del train
         for scenario in args.scenarios:
             for seed in args.test_seeds:
                 feats, labels, halves = unit_features(held, seed, scenario)
                 p_dead, p_home = models.predict(feats, halves)
+                p_switch = models.predict_switch(feats)
                 pred = decode.decode(p_dead, p_home, halves, len(labels),
-                                     dict(config.DECODER, **(args.decoder or {})))
+                                     dict(config.DECODER, **(args.decoder or {})),
+                                     p_switch=p_switch)
                 spell, macro, n_pred, n_gt = score(labels, pred)
                 units.append(dict(scenario=scenario, game=held, seed=seed, spell=spell,
                                   macro=macro, n_pred=n_pred, n_gt=n_gt))
-                probs["{}_{}_{}".format(scenario, held, seed)] = (p_dead, p_home)
+                probs["{}_{}_{}".format(scenario, held, seed)] = (p_dead, p_home, p_switch)
                 print("  {:<7} game {} seed {}: spellF1 {:.4f}  macroF1 {:.4f}  ({}/{} spells)"
                       .format(scenario, held, seed, spell, macro, n_pred, n_gt), flush=True)
     os.makedirs(EVAL_DIR, exist_ok=True)
@@ -82,10 +84,11 @@ def rescore(args):
         probs = pickle.load(fh)
     prm = dict(config.DECODER, **(args.decoder or {}))
     units = []
-    for key, (p_dead, p_home) in sorted(probs.items()):
+    for key, (p_dead, p_home, *rest) in sorted(probs.items()):
+        p_switch = rest[0] if rest else None
         scenario, game, seed = key.split("_")
         _, labels, halves = unit_features(int(game), int(seed), scenario)
-        pred = decode.decode(p_dead, p_home, halves, len(labels), prm)
+        pred = decode.decode(p_dead, p_home, halves, len(labels), prm, p_switch=p_switch)
         spell, macro, n_pred, n_gt = score(labels, pred)
         units.append(dict(scenario=scenario, game=int(game), seed=int(seed), spell=spell,
                           macro=macro, n_pred=n_pred, n_gt=n_gt))
@@ -138,6 +141,10 @@ def main():
                     help="possession-equal training weights for the team model (default: as "
                          "shipped, config.SPELL_WEIGHTING)")
     ap.add_argument("--no-spell-weighting", dest="spell_weighting", action="store_false")
+    ap.add_argument("--hand-over", dest="hand_over", action="store_true", default=config.HAND_OVER,
+                    help="train the hand-over detector and use it in decoding (default: as "
+                         "shipped, config.HAND_OVER)")
+    ap.add_argument("--no-hand-over", dest="hand_over", action="store_false")
     ap.add_argument("--stage2", action="store_true")
     ap.add_argument("--decoder", type=json.loads, default=None,
                     help='decoder costs as JSON, e.g. \'{"switch": 16}\' (default: config)')

@@ -77,13 +77,14 @@ def main(tag, scenario="default"):
     by_len = defaultdict(lambda: defaultdict(int))
     by_ball = defaultdict(lambda: defaultdict(int))
     invented = []
-    for key, (p_dead, p_home) in sorted(probs.items()):
+    for key, (p_dead, p_home, *rest) in sorted(probs.items()):
+        p_switch = rest[0] if rest else None
         sc, game, seed = key.split("_")
         if sc != scenario:
             continue
         feats, labels, halves = unit_features(int(game), int(seed), sc)
         _, events = sample_games.load_game(int(game))
-        pred = decode.decode(p_dead, p_home, halves, len(labels), prm)
+        pred = decode.decode(p_dead, p_home, halves, len(labels), prm, p_switch=p_switch)
         gt_sw, pr_sw = switches(labels), switches(pred)
         free = {t: [f for f, k in pr_sw if k == t] for t in "HA"}   # unmatched predictions
         used = set()

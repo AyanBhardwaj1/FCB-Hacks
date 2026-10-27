@@ -58,6 +58,8 @@ def main():
                     help="possession-equal training weights for the team model (default: as "
                          "shipped, config.SPELL_WEIGHTING)")
     ap.add_argument("--no-spell-weighting", dest="spell_weighting", action="store_false")
+    ap.add_argument("--hand-over", dest="hand_over", action="store_true", default=config.HAND_OVER)
+    ap.add_argument("--no-hand-over", dest="hand_over", action="store_false")
     ap.add_argument("--train-scenario", default="train")
     ap.add_argument("--oof", default=os.path.join(ROOT, "cache", "oof.pkl"))
     ap.add_argument("--train-seeds", type=int, nargs="+", default=[1, 2])
@@ -78,18 +80,18 @@ def main():
         train = [data[(g, s)] + (g,) for g in sample_games.GAMES if g != held
                  for s in train_seeds]
         t = time.time()
-        models = FrameModels(stage2=args.stage2, exclude=args.exclude,
+        models = FrameModels(stage2=args.stage2, exclude=args.exclude, hand_over=args.hand_over,
                              spell_weighting=args.spell_weighting).fit(train)
         feats, labels, halves = data[(held, args.test_seed)]
         p_dead, p_home = models.predict(feats, halves)
-        oof[held] = (p_dead, p_home, labels, halves)
+        oof[held] = (p_dead, p_home, labels, halves, models.predict_switch(feats))
         print("fold game {}: trained+predicted in {:.0f}s".format(held, time.time() - t))
 
     with open(args.oof, "wb") as fh:
         pickle.dump(oof, fh, protocol=4)
 
     # frame-level diagnostics
-    for g, (p_dead, p_home, labels, halves) in oof.items():
+    for g, (p_dead, p_home, labels, halves, _) in oof.items():
         g_mask = labels != "X"
         dead_acc = np.mean((p_dead[g_mask] > 0.5) == (labels[g_mask] == "D"))
         alive = np.isin(labels, ["H", "A"])
@@ -101,6 +103,11 @@ def main():
 
     grid = dict(a_dead=[0.75, 1.0, 1.5], a_team=[2.0, 3.0], switch=[32, 48, 64, 96],
                 stop=[16, 32, 48], restart=[16, 32, 48])
+    if args.hand_over:
+        # the transition costs are already tuned; sweep how strongly the detector lowers them
+        grid = dict(a_dead=[0.75], a_team=[2.0], switch=[48, 64], stop=[40], restart=[40],
+                    hand_w=[0.0, 2.0, 4.0, 8.0, 16.0], hand_floor=[8.0, 16.0, 32.0],
+                    hand_q=[0.05])
     if args.quick:
         grid = dict(a_team=[1.0], switch=[8, 16, 32, 64], stop=[8, 16, 32], restart=[8, 16, 32])
     rows = []
@@ -110,8 +117,8 @@ def main():
         if prm["switch"] > prm["stop"] + prm["restart"] - decode.SWITCH_MARGIN:
             continue          # decode() refuses these: a stoppage would be the cheap hand-over
         per = []
-        for g, (p_dead, p_home, labels, halves) in oof.items():
-            pred = decode.decode(p_dead, p_home, halves, len(labels), prm)
+        for g, (p_dead, p_home, labels, halves, p_switch) in oof.items():
+            pred = decode.decode(p_dead, p_home, halves, len(labels), prm, p_switch=p_switch)
             per.append(score(labels, pred))
         rows.append((np.mean([p[0] for p in per]), np.mean([p[1] for p in per]), prm, per))
     rows.sort(key=lambda r: -r[0])

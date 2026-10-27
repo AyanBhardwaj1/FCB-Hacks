@@ -48,12 +48,13 @@ def main(tag, scenario="default"):
     prm = dict(config.DECODER, **(run_args.get("decoder") or {}))
     stats = {k: dict(n_gt=0, found=0, spurious=0, offsets=[]) for k in ("switch", "stop", "restart")}
     oracle = {"model": [], "oracle_dead": [], "oracle_team": []}
-    for key, (p_dead, p_home) in sorted(probs.items()):
+    for key, (p_dead, p_home, *rest) in sorted(probs.items()):
+        p_switch = rest[0] if rest else None
         sc, game, seed = key.split("_")
         if sc != scenario:
             continue
         _, labels, halves = unit_features(int(game), int(seed), sc)
-        pred = decode.decode(p_dead, p_home, halves, len(labels), prm)
+        pred = decode.decode(p_dead, p_home, halves, len(labels), prm, p_switch=p_switch)
         gt_c, pr_c = pm.label_codes(labels), pm.label_codes(pred)
         runs = pm.valid_runs(gt_c)
         gt_t, pr_t = pm.transitions(gt_c, runs), pm.transitions(pr_c, runs)

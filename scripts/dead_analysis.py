@@ -57,13 +57,14 @@ def main(tag, scenario="default"):
     by_dur = defaultdict(lambda: [0, 0])
     start_err, end_err = [], []
     invented = []
-    for key, (p_dead, p_home) in sorted(probs.items()):
+    for key, (p_dead, p_home, *rest) in sorted(probs.items()):
+        p_switch = rest[0] if rest else None
         sc, game, seed = key.split("_")
         if sc != scenario:
             continue
         feats, labels, halves = unit_features(int(game), int(seed), sc)
         _, events = sample_games.load_game(int(game))
-        pred = decode.decode(p_dead, p_home, halves, len(labels), prm)
+        pred = decode.decode(p_dead, p_home, halves, len(labels), prm, p_switch=p_switch)
         true_d, pred_d = labels == "D", pred == "D"
         for a, b in runs(true_d):
             hit = pred_d[a:b].mean() > 0.3
