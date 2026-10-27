@@ -526,3 +526,73 @@ def test_min_dead_viterbi_rejects_non_finite_scores():
     scores[:, 2] = -np.inf
     with pytest.raises(ValueError, match="finite"):
         decode.viterbi(scores, 1, 1, 1, min_dead=3)
+
+
+# -- hand-over detector and per-frame switch costs ------------------------------------------------------
+
+def _path_score_var(scores, path, switch, stop, restart):
+    """Like _path_score, with switch[t] = cost of switching team INTO frame t."""
+    total = scores[np.arange(len(path)), path].sum()
+    for t in range(1, len(path)):
+        a, b = int(path[t - 1]), int(path[t])
+        if {a, b} == {0, 1}:
+            total -= switch[t]
+        elif b == 2 and a != 2:
+            total -= stop
+        elif a == 2 and b != 2:
+            total -= restart
+    return total
+
+
+def test_viterbi_with_per_frame_switch_costs_finds_the_optimum():
+    rng = np.random.default_rng(2)
+    for k in (1, 3):
+        for _ in range(20):
+            T = 7
+            scores = rng.normal(size=(T, 3))
+            sw = rng.uniform(0, 3, T)
+            stop, restart = rng.uniform(0, 3, 2)
+            valid = (lambda p: _valid_min_dead(p, k)) if k > 1 else (lambda p: True)
+            best = max(_path_score_var(scores, np.array(p), sw, stop, restart)
+                       for p in itertools.product(range(3), repeat=T) if valid(p))
+            path = decode.viterbi(scores, sw, stop, restart, min_dead=k)
+            assert _path_score_var(scores, path, sw, stop, restart) == pytest.approx(best)
+
+
+def test_hand_over_evidence_lets_a_short_possession_through():
+    """A 2 s home possession inside away play, with only moderate frame evidence: a flat switch
+    cost swallows it; hand-over evidence at both edges lets the decoder keep it."""
+    n = 600
+    t = np.arange(n)
+    p_home = np.where((t >= 300) & (t < 350), 0.7, 0.05)
+    p_dead = np.full(n, 0.02)
+    flat = decode.decode(p_dead, p_home, [(0, n)], n, config.DECODER)
+    assert "H" not in set(flat)
+    p_switch = np.full(n, 0.01)
+    p_switch[(np.abs(t - 300) <= 12) | (np.abs(t - 350) <= 12)] = 0.9
+    sharp = decode.decode(p_dead, p_home, [(0, n)], n,
+                          dict(config.DECODER, hand_w=8.0, hand_q=0.05, hand_floor=8.0),
+                          p_switch=p_switch)
+    assert np.mean(sharp[300:350] == "H") > 0.9
+
+
+def test_near_switch_labels():
+    from mtah.model import near_switch
+    labels = np.array(["H"] * 50 + ["A"] * 50 + ["D"] * 20 + ["H"] * 30)
+    y = near_switch(labels, 5)
+    assert y[45:55].all() and not y[:44].any() and not y[56:].any()   # D -> H is not a hand-over
+
+
+def test_hand_over_detector_is_team_symmetric():
+    from mtah.model import FrameModels
+    items = []
+    for s in (0, 1):
+        m, lab = _toy_match(s)
+        items.append((features.compute(m), lab, m.halves, s))
+    models = FrameModels(gb_params=dict(max_iter=20), stride=2, hand_over=True).fit(items)
+    m, _ = _toy_match(5)
+    p = models.predict_switch(features.compute(m))
+    m.team = 1 - m.team
+    q = models.predict_switch(features.compute(m))
+    assert p is not None and p.shape == (m.n_frames,)
+    np.testing.assert_allclose(q, p, atol=1e-9)

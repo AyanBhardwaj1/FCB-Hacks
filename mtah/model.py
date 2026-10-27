@@ -38,6 +38,7 @@ STAGE2_PARAMS = dict(max_iter=200, learning_rate=0.05, max_leaf_nodes=15, min_sa
 TRAIN_STRIDE = 4      # frames; neighbouring frames are near-duplicates, so subsample
 SPELL_REF_S = 8.0     # s; possession-equal weights are 1 for a possession this long...
 SPELL_W_LO, SPELL_W_HI = 0.25, 4.0   # ...and clipped to this range
+HAND_W = 12           # frames; the hand-over detector learns "a possession change within +/- this"
 CONTEXT_S = (0.2, 0.5, 1.0, 2.0, 4.0, 8.0)
 SIDE_S = (0.5, 1.0, 2.0, 4.0)
 EPS = 1e-4
@@ -111,13 +112,25 @@ def spell_weights(labels, ref_frames, lo=SPELL_W_LO, hi=SPELL_W_HI):
     return w
 
 
+def near_switch(labels, w):
+    """1 on frames within +/- w of a direct H <-> A change (not via a stoppage), else 0."""
+    labels = np.asarray(labels)
+    y = np.zeros(len(labels), dtype=np.int8)
+    for i in np.flatnonzero(labels[1:] != labels[:-1]) + 1:
+        if {labels[i - 1], labels[i]} == {"H", "A"}:
+            y[max(0, i - w):i + w] = 1
+    return y
+
+
 class Stage1:
-    def __init__(self, gb_params=None, stride=TRAIN_STRIDE, exclude=None, spell_weighting=False):
+    def __init__(self, gb_params=None, stride=TRAIN_STRIDE, exclude=None, spell_weighting=False,
+                 hand_over=False):
         self.gb_params = dict(GB_PARAMS, **(gb_params or {}))
         self.stride = stride
         self.exclude = exclude   # regex: feature names to leave out (ablations)
         self.names = None        # (team names, shared names) the models were trained on
         self.spell_weighting = spell_weighting   # possession-equal weights for the team model
+        self.hand_over = hand_over               # also train the hand-over detector
 
     def _matrices(self, feats):
         """(xh, xa, xs), columns picked by name in the order the models were trained on.
@@ -144,7 +157,7 @@ class Stage1:
 
     def fit(self, items):
         """items: [(feats, labels)] where labels is an array of 'H'/'A'/'D'/'X' per frame."""
-        dX, dy, pX, py, pw = [], [], [], [], []
+        dX, dy, pX, py, pw, hX, hy = [], [], [], [], [], [], []
         for feats, labels in items:
             xh, xa, xs = self._matrices(feats)
             sel = np.flatnonzero(np.isin(labels, ["H", "A", "D"]))[::self.stride]
@@ -161,11 +174,27 @@ class Stage1:
             pX += [p1, p2]
             py += [home, 1 - home]
             pw += [w_all[sel][alive]] * 2
+            if self.hand_over:
+                near = near_switch(labels, HAND_W)[sel][alive]
+                h1, h2 = _dead_design(xh[sel][alive], xa[sel][alive], xs[sel][alive])
+                hX += [h1, h2]
+                hy += [near, near]
         self.dead = HistGradientBoostingClassifier(**self.gb_params).fit(
             np.vstack(dX), np.concatenate(dy))
         self.poss = HistGradientBoostingClassifier(**self.gb_params).fit(
             np.vstack(pX), np.concatenate(py), sample_weight=np.concatenate(pw))
+        self.hand = HistGradientBoostingClassifier(**self.gb_params).fit(
+            np.vstack(hX), np.concatenate(hy)) if self.hand_over else None
         return self
+
+    def predict_switch(self, feats):
+        """P(a direct possession change within +/- HAND_W frames), team-symmetric; None if the
+        detector was not trained."""
+        if getattr(self, "hand", None) is None:
+            return None
+        xh, xa, xs = self._matrices(feats)
+        h1, h2 = _dead_design(xh, xa, xs)
+        return 0.5 * (self.hand.predict_proba(h1)[:, 1] + self.hand.predict_proba(h2)[:, 1])
 
     def predict(self, feats):
         xh, xa, xs = self._matrices(feats)
@@ -182,16 +211,17 @@ class FrameModels:
     """
 
     def __init__(self, gb_params=None, stride=TRAIN_STRIDE, stage2=False, exclude=None,
-                 spell_weighting=False):
+                 spell_weighting=False, hand_over=False):
         self.gb_params = gb_params
         self.stride = stride
         self.use_stage2 = stage2
         self.exclude = exclude
         self.spell_weighting = spell_weighting
+        self.hand_over = hand_over
 
     def fit(self, items):
         self.stage1 = Stage1(self.gb_params, self.stride, self.exclude,
-                             self.spell_weighting).fit([(f, l) for f, l, _, _ in items])
+                             self.spell_weighting, self.hand_over).fit([(f, l) for f, l, _, _ in items])
         if not self.use_stage2:
             return self
         groups = sorted({g for _, _, _, g in items})
@@ -222,6 +252,10 @@ class FrameModels:
         self.home2 = HistGradientBoostingClassifier(**STAGE2_PARAMS).fit(
             np.vstack(hX), np.concatenate(hy), sample_weight=np.concatenate(hw))
         return self
+
+    def predict_switch(self, feats):
+        """Hand-over detector output per frame, or None if it was not trained."""
+        return self.stage1.predict_switch(feats)
 
     def predict(self, feats, halves):
         """(p_dead, p_home) per frame. p_home is P(home has it | ball alive)."""

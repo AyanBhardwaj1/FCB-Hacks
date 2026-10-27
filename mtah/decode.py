@@ -25,7 +25,8 @@ import numpy as np
 
 LABELS = np.array(["H", "A", "D"])
 
-DEFAULT = dict(a_dead=1.0, a_team=1.0, switch=16.0, stop=16.0, restart=16.0, min_dead=1)
+DEFAULT = dict(a_dead=1.0, a_team=1.0, switch=16.0, stop=16.0, restart=16.0, min_dead=1,
+               hand_w=0.0, hand_q=0.05, hand_floor=8.0)
 
 # A hand-over must be cheaper than stopping and restarting play by at least this much. At
 # equality the transition costs no longer separate the two, and any hand-over where the dead
@@ -41,11 +42,25 @@ def emissions(p_dead, p_home, a_dead, a_team, eps=1e-4):
                             a_dead * np.log(pd_)])
 
 
+def switch_costs(p_switch, base, hand_w, hand_q, floor):
+    """Per-frame switch cost from the hand-over detector's P(possession change near t).
+
+    base where the detector sees nothing unusual, lowered by hand_w per unit of log-odds above
+    the base rate hand_q, never below floor -- never above base either, so the decoder rules
+    that constrain the base (switch <= stop + restart - margin) still hold everywhere.
+    """
+    p = np.clip(p_switch, 1e-4, 1 - 1e-4)
+    lift = np.log(p / (1 - p)) - np.log(hand_q / (1 - hand_q))
+    return np.clip(base - hand_w * np.maximum(lift, 0.0), floor, base)
+
+
 def viterbi(scores, switch, stop, restart, min_dead=1):
     """Best state path for [T, 3] emission scores under the transition costs.
 
+    `switch` is a number or a [T] array; switch[t] is the cost of changing team INTO frame t.
     A plain-float loop: with three states, numpy's per-call overhead costs more than the maths.
     """
+    switch = np.broadcast_to(np.asarray(switch, dtype=np.float64), (len(scores),)).tolist()
     if min_dead > 1:
         if not np.all(np.isfinite(scores)):
             # C[t] - C[s] would be -inf - -inf = NaN and silently poison the path
@@ -56,15 +71,16 @@ def viterbi(scores, switch, stop, restart, min_dead=1):
     back = bytearray(3 * T)
     h, a, d = sh[0], sa[0], sd[0]
     for t in range(1, T):
+        sw = switch[t]
         # best predecessor of each state (ties go to staying put, then to the lower index)
-        hh, ah, dh = h, a - switch, d - restart
+        hh, ah, dh = h, a - sw, d - restart
         if hh >= ah and hh >= dh:
             nh, bh = hh, 0
         elif ah >= dh:
             nh, bh = ah, 1
         else:
             nh, bh = dh, 2
-        ha, aa, da = h - switch, a, d - restart
+        ha, aa, da = h - sw, a, d - restart
         if aa >= ha and aa >= da:
             na, ba = aa, 1
         elif ha >= da:
@@ -109,14 +125,15 @@ def _viterbi_min_dead(scores, switch, stop, restart, k):
     back_g = bytearray(T)                         # 0 stayed in G, 1 graduated from E[t-k+1]
     h, a, g = sh[0], sa[0], sd[0]                 # dead from the start is exempt
     for t in range(1, T):
-        ch, ca, cg = h, a - switch, g - restart
+        sw = switch[t]
+        ch, ca, cg = h, a - sw, g - restart
         if ch >= ca and ch >= cg:
             nh, bh = ch, 0
         elif ca >= cg:
             nh, bh = ca, 1
         else:
             nh, bh = cg, 2
-        ch, ca, cg = h - switch, a, g - restart
+        ch, ca, cg = h - sw, a, g - restart
         if ca >= ch and ca >= cg:
             na, ba = ca, 1
         elif ch >= cg:
@@ -172,10 +189,12 @@ def _viterbi_min_dead(scores, switch, stop, restart, k):
     return path
 
 
-def decode(p_dead, p_home, halves, n_frames, params=None, extra=None):
+def decode(p_dead, p_home, halves, n_frames, params=None, extra=None, p_switch=None):
     """Labels for every frame: H / A / D inside the halves, X outside.
 
     `extra` is an optional [T, 3] array of additional log-scores (e.g. Smart Tagging priors).
+    `p_switch`, the hand-over detector's per-frame P(possession change near t), lowers the
+    switch cost where a hand-over is likely (switch_costs; off when hand_w is 0).
     """
     prm = dict(DEFAULT, **(params or {}))
     if prm["switch"] > prm["stop"] + prm["restart"] - SWITCH_MARGIN:
@@ -189,9 +208,14 @@ def decode(p_dead, p_home, halves, n_frames, params=None, extra=None):
     scores = emissions(p_dead, p_home, prm["a_dead"], prm["a_team"])
     if extra is not None:
         scores = scores + extra
+    switch = prm["switch"]
+    if p_switch is not None and prm.get("hand_w", 0.0) > 0:
+        switch = switch_costs(p_switch, prm["switch"], prm["hand_w"], prm["hand_q"],
+                              prm["hand_floor"])
+    switch = np.broadcast_to(np.asarray(switch, dtype=np.float64), (n_frames,))
     out = np.full(n_frames, "X", dtype="<U1")
     for a, b in halves:
-        path = viterbi(scores[a:b], prm["switch"], prm["stop"], prm["restart"],
+        path = viterbi(scores[a:b], switch[a:b], prm["stop"], prm["restart"],
                        prm.get("min_dead", 1))
         out[a:b] = LABELS[path]
     return out

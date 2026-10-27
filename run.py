@@ -76,6 +76,7 @@ def main():
     with open(args.model, "rb") as fh:
         models = pickle.load(fh)
     p_dead, p_home = models.predict(feats, halves)
+    p_switch = models.predict_switch(feats) if hasattr(models, "predict_switch") else None
 
     extra = None
     if args.tags and os.path.isfile(paths.get("smart_tagging", "")):
@@ -85,7 +86,8 @@ def main():
         extra = tags.priors(events, n_frames, home_name, away_name, fps=match.fps)
         print("Smart Tagging: {} instances used as priors".format(len(events)))
 
-    labels = decode.decode(p_dead, p_home, halves, n_frames, config.DECODER, extra)
+    labels = decode.decode(p_dead, p_home, halves, n_frames, config.DECODER, extra,
+                           p_switch=p_switch)
     write_submission(out, labels)
     if args.save_probs:
         np.savez_compressed(args.save_probs, p_dead=p_dead, p_home=p_home)

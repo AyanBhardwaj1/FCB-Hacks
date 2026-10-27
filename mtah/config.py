@@ -24,6 +24,10 @@ DECODER = dict(a_dead=0.75, a_team=2.0, switch=64.0, stop=40.0, restart=40.0, mi
 # every possession once, so training should too.
 SPELL_WEIGHTING = True
 
+# Train the hand-over detector (mtah/model.near_switch) and let it lower the decoder's switch cost
+# where a possession change is likely (mtah/decode.switch_costs). Off until validated.
+HAND_OVER = False
+
 # Degradation seeds used to build the training set from each sample game. Four rather than two:
 # more varied noise for the same three matches (see docs/TECHNICAL.md).
 TRAIN_SEEDS = (1, 2, 3, 4)
