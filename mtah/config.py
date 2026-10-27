@@ -25,8 +25,20 @@ DECODER = dict(a_dead=0.75, a_team=2.0, switch=64.0, stop=40.0, restart=40.0, mi
 SPELL_WEIGHTING = True
 
 # Train the hand-over detector (mtah/model.near_switch) and let it lower the decoder's switch cost
-# where a possession change is likely (mtah/decode.switch_costs). Off until validated.
+# where a possession change is likely (mtah/decode.switch_costs). Off: on the design seeds it did
+# not improve spellF1 (docs/TECHNICAL.md, round 5).
 HAND_OVER = False
+
+# Detector weights tuned on degradation seed 100; applied by decoder() whenever the detector is on.
+HAND_DECODER = dict(hand_w=24.0, hand_floor=24.0, hand_q=0.05)
+
+
+def decoder(hand_over=None):
+    """The decoder settings to use: DECODER, plus HAND_DECODER when the hand-over detector is on
+    (HAND_OVER unless overridden). One place, so turning the detector on can never leave
+    decoding ignoring it."""
+    on = HAND_OVER if hand_over is None else hand_over
+    return dict(DECODER, **(HAND_DECODER if on else {}))
 
 # Degradation seeds used to build the training set from each sample game. Four rather than two:
 # more varied noise for the same three matches (see docs/TECHNICAL.md).

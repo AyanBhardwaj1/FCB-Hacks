@@ -86,7 +86,8 @@ def main():
         extra = tags.priors(events, n_frames, home_name, away_name, fps=match.fps)
         print("Smart Tagging: {} instances used as priors".format(len(events)))
 
-    labels = decode.decode(p_dead, p_home, halves, n_frames, config.DECODER, extra,
+    labels = decode.decode(p_dead, p_home, halves, n_frames,
+                           config.decoder(hand_over=p_switch is not None), extra,
                            p_switch=p_switch)
     write_submission(out, labels)
     if args.save_probs:

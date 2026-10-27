@@ -596,3 +596,13 @@ def test_hand_over_detector_is_team_symmetric():
     q = models.predict_switch(features.compute(m))
     assert p is not None and p.shape == (m.n_frames,)
     np.testing.assert_allclose(q, p, atol=1e-9)
+
+
+def test_turning_on_the_hand_over_option_also_turns_it_on_in_decoding():
+    """config.decoder(hand_over=True) must carry the detector weights, or the opt-in trains a
+    detector that decoding then ignores."""
+    on = config.decoder(hand_over=True)
+    off = config.decoder(hand_over=False)
+    assert on["hand_w"] > 0 and off.get("hand_w", 0.0) == 0.0
+    assert {k: v for k, v in on.items() if not k.startswith("hand_")} == \
+        {k: v for k, v in off.items() if not k.startswith("hand_")}

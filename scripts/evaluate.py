@@ -53,7 +53,7 @@ def run(args):
                 p_dead, p_home = models.predict(feats, halves)
                 p_switch = models.predict_switch(feats)
                 pred = decode.decode(p_dead, p_home, halves, len(labels),
-                                     dict(config.DECODER, **(args.decoder or {})),
+                                     dict(config.decoder(args.hand_over), **(args.decoder or {})),
                                      p_switch=p_switch)
                 spell, macro, n_pred, n_gt = score(labels, pred)
                 units.append(dict(scenario=scenario, game=held, seed=seed, spell=spell,
@@ -64,7 +64,8 @@ def run(args):
     os.makedirs(EVAL_DIR, exist_ok=True)
     # record the fully resolved decoder, not just the overrides: config can change later, and
     # the analysis scripts re-decode with whatever a run records
-    run_args = dict(vars(args), decoder=dict(config.DECODER, **(args.decoder or {})))
+    run_args = dict(vars(args), decoder=dict(config.decoder(args.hand_over),
+                                             **(args.decoder or {})))
     with open(os.path.join(EVAL_DIR, args.tag + ".json"), "w") as fh:
         json.dump(dict(args=run_args, code=CODE_HASH, units=units), fh, indent=1)
     with open(os.path.join(EVAL_DIR, args.tag + "_probs.pkl"), "wb") as fh:
@@ -82,7 +83,7 @@ def rescore(args):
         sys.exit("run {!r} was made with different code; re-run it instead".format(src))
     with open(os.path.join(EVAL_DIR, src + "_probs.pkl"), "rb") as fh:
         probs = pickle.load(fh)
-    prm = dict(config.DECODER, **(args.decoder or {}))
+    prm = dict(config.decoder(run_meta["args"].get("hand_over", False)), **(args.decoder or {}))
     units = []
     for key, (p_dead, p_home, *rest) in sorted(probs.items()):
         p_switch = rest[0] if rest else None
