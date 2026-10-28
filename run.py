@@ -31,27 +31,41 @@ MIN_BALL_COVERAGE = 0.20   # share of graded frames with a ball; the real ATD ha
 MIN_PLAYERS = 10           # mean tracked players on graded frames; the real ATD has 20.5
 
 
-def add_video_ball(match, paths, halves):
-    """Fill tracker gaps in match.ball_x/_y from the tactical video (mtah/video_ball.py).
-
-    Detections are cached under cache/ (derived from the licensed video: never commit them) and
-    merged only if the detector's calibration probes on this video pass video_ball.trustworthy.
-    """
+def video_cache_key(paths, match, halves):
+    """Hash of everything the video detections depend on: the video and homography files, the
+    detector's code and OpenCV version, the tracked ball, the halves, pitch and frame rate."""
     import hashlib
+
+    import cv2
 
     from mtah import video_ball
 
-    for key in ("video", "homography"):
-        if not os.path.isfile(paths[key]):
-            sys.exit("--video-ball needs {}".format(paths[key]))
     h = hashlib.sha256()
     for path in (paths["video"], paths["homography"]):
         st = os.stat(path)
         h.update("{}:{}:{}".format(path, st.st_size, int(st.st_mtime)).encode())
     with open(video_ball.__file__, "rb") as fh:
         h.update(fh.read())
+    h.update(repr((cv2.__version__, list(map(tuple, halves)), tuple(match.pitch),
+                   match.fps)).encode())
     h.update(np.nan_to_num(match.ball_x).tobytes())
-    cache = os.path.join(config.CACHE_DIR, "video_ball_{}.npz".format(h.hexdigest()[:16]))
+    h.update(np.nan_to_num(match.ball_y).tobytes())
+    return h.hexdigest()[:16]
+
+
+def add_video_ball(match, paths, halves):
+    """Fill tracker gaps in match.ball_x/_y from the tactical video (mtah/video_ball.py).
+
+    Detections are cached under cache/ (derived from the licensed video: never commit them) and
+    merged only if the detector's calibration probes on this video pass video_ball.trustworthy.
+    """
+    from mtah import video_ball
+
+    for key in ("video", "homography"):
+        if not os.path.isfile(paths[key]):
+            sys.exit("--video-ball needs {}".format(paths[key]))
+    cache = os.path.join(config.CACHE_DIR, "video_ball_{}.npz".format(
+        video_cache_key(paths, match, halves)))
     if os.path.isfile(cache):
         z = np.load(cache, allow_pickle=False)
         det_x, det_y = z["det_x"], z["det_y"]
@@ -64,11 +78,15 @@ def add_video_ball(match, paths, halves):
         det_x, det_y, report = video_ball.run_video(paths["video"], Hs, valid, match.ball_x,
                                                     match.ball_y, halves, match.pitch, match.fps)
         os.makedirs(config.CACHE_DIR, exist_ok=True)
-        np.savez_compressed(cache, det_x=det_x, det_y=det_y, **report)
+        tmp = cache[:-4] + ".tmp{}.npz".format(os.getpid())
+        np.savez_compressed(tmp, det_x=det_x, det_y=det_y, **report)
+        os.replace(tmp, cache)          # never a truncated cache at the final path
         print("video ball: done in {:.0f}s".format(time.time() - t))
-    print("video ball: calibration on hidden tracked stretches -- {probe_frames:.0f} probe "
-          "frames, found {probe_found:.0%}, median error {probe_median_err_m:.2f} m, within 1 m "
-          "{probe_within_1m:.0%}; gap frames searched {gap_frames:.0f}, filled {gap_filled:.0%}"
+    print("video ball: read {frames_read:.0f} of {frames_expected:.0f} frames; calibration on "
+          "hidden tracked stretches -- ball present: {probe_frames:.0f} frames, found "
+          "{probe_found:.0%}, median error {probe_median_err_m:.2f} m, within 1 m "
+          "{probe_within_1m:.0%}; ball absent: {absent_frames:.0f} frames, false detections "
+          "{absent_fp_rate:.1%}; gap frames searched {gap_frames:.0f}, filled {gap_filled:.0%}"
           .format(**report))
     if not video_ball.trustworthy(report):
         print("video ball: calibration below the trust thresholds -- NOT using the detections")

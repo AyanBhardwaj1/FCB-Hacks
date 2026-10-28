@@ -157,15 +157,25 @@ than chance beyond 8 s. Snapping to the nearest player adds nothing.
     back to pitch metres;
   - the existing speed-spike filter downstream.
 
-  It is classical OpenCV with no learned weights, so it is deterministic and inspectable. It
-  **calibrates itself on the real video without any ground truth**: stretches the tracker does
-  see are hidden and searched exactly like gaps, and the detections are compared with the
-  tracked ball. It **fails closed**: detections are merged only if at least 100 probe frames
-  exist, at least 15% are found and at least 80% of those land within 1 m. Results are cached
-  under `cache/` (derived from the licensed video, never committed). Tests run it on synthetic
-  video (a perspective homography, coloured players, a white-shirted decoy, occlusions, MJPG
-  compression): at least 90% of visible-ball frames found within 0.5 m, no detections while the
-  ball is hidden, and only gap frames filled.
+  It is classical OpenCV with no learned weights, so it is deterministic and inspectable.
+  Candidates on the penalty or centre spots are ignored, and a detection only counts if a
+  neighbouring frame confirms it. It **calibrates itself on the real video without any ground
+  truth**. Stretches the tracker does see are hidden, with lengths drawn from the real gaps, and
+  searched like gaps twice:
+  - around the expected position, measuring how often and how accurately the ball is found when
+    it is there;
+  - around a point the ball is *not* near, measuring false positives (in real gaps the ball is
+    often occluded, in the air or out of play).
+
+  It **fails closed**: detections are merged only if the whole video was read and both probe
+  kinds pass. That means at least 100 frames each, at least 15% found, at least 80% of finds
+  within 1 m, and at most 5% false detections. Results are cached under `cache/` (derived from
+  the licensed video, never committed). Tests run it on synthetic video (a perspective homography,
+  coloured players, a white-shirted decoy, painted spots, occlusions, MJPG compression, a
+  truncated file): at least 90% of visible-ball frames found within 0.5 m, no detections while
+  the ball is hidden, only gap frames filled. Independent review found that the first version's
+  calibration could not see false positives (a penalty spot would have passed as the ball), and
+  that is what the ball-absent probes, marking rejection and confirmation rule fix.
 - **Not validated on real footage**: there is no video in the sample data, and the match video
   cannot be used in a cloud session. Its effect on the real match is unknown until it runs
   locally, and the calibration report it prints is the evidence to judge it by.
