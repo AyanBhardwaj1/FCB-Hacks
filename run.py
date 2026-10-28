@@ -31,6 +31,55 @@ MIN_BALL_COVERAGE = 0.20   # share of graded frames with a ball; the real ATD ha
 MIN_PLAYERS = 10           # mean tracked players on graded frames; the real ATD has 20.5
 
 
+def add_video_ball(match, paths, halves):
+    """Fill tracker gaps in match.ball_x/_y from the tactical video (mtah/video_ball.py).
+
+    Detections are cached under cache/ (derived from the licensed video: never commit them) and
+    merged only if the detector's calibration probes on this video pass video_ball.trustworthy.
+    """
+    import hashlib
+
+    from mtah import video_ball
+
+    for key in ("video", "homography"):
+        if not os.path.isfile(paths[key]):
+            sys.exit("--video-ball needs {}".format(paths[key]))
+    h = hashlib.sha256()
+    for path in (paths["video"], paths["homography"]):
+        st = os.stat(path)
+        h.update("{}:{}:{}".format(path, st.st_size, int(st.st_mtime)).encode())
+    with open(video_ball.__file__, "rb") as fh:
+        h.update(fh.read())
+    h.update(np.nan_to_num(match.ball_x).tobytes())
+    cache = os.path.join(config.CACHE_DIR, "video_ball_{}.npz".format(h.hexdigest()[:16]))
+    if os.path.isfile(cache):
+        z = np.load(cache, allow_pickle=False)
+        det_x, det_y = z["det_x"], z["det_y"]
+        report = {k: float(z[k]) for k in z.files if k not in ("det_x", "det_y")}
+        print("video ball: cached detections from {}".format(cache))
+    else:
+        Hs, valid = video_ball.load_homographies(paths["homography"], match.n_frames)
+        t = time.time()
+        print("video ball: searching tracker gaps in {} ...".format(paths["video"]))
+        det_x, det_y, report = video_ball.run_video(paths["video"], Hs, valid, match.ball_x,
+                                                    match.ball_y, halves, match.pitch, match.fps)
+        os.makedirs(config.CACHE_DIR, exist_ok=True)
+        np.savez_compressed(cache, det_x=det_x, det_y=det_y, **report)
+        print("video ball: done in {:.0f}s".format(time.time() - t))
+    print("video ball: calibration on hidden tracked stretches -- {probe_frames:.0f} probe "
+          "frames, found {probe_found:.0%}, median error {probe_median_err_m:.2f} m, within 1 m "
+          "{probe_within_1m:.0%}; gap frames searched {gap_frames:.0f}, filled {gap_filled:.0%}"
+          .format(**report))
+    if not video_ball.trustworthy(report):
+        print("video ball: calibration below the trust thresholds -- NOT using the detections")
+        return
+    bx, by, filled = video_ball.merge(match.ball_x, match.ball_y, det_x, det_y)
+    match.ball_x, match.ball_y = bx.astype(np.float32), by.astype(np.float32)
+    graded = np.concatenate([np.arange(a, b) for a, b in halves])
+    print("video ball: filled {} frames; ball now on {:.1%} of graded frames".format(
+        int(filled.sum()), np.isfinite(match.ball_x[graded]).mean()))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--data-dir", default=os.environ.get("MTAH_DATA_DIR") or
@@ -41,6 +90,10 @@ def main():
     ap.add_argument("--tags", action="store_true",
                     help="add Smart Tagging priors (off by default: no measurable gain in "
                          "validation, see docs/TECHNICAL.md)")
+    ap.add_argument("--video-ball", action="store_true",
+                    help="search the tactical video for the ball inside tracker gaps and fill "
+                         "them where the detector's self-calibration says it is reliable "
+                         "(needs requirements-video.txt; runs locally, ~20-40 min, cached)")
     ap.add_argument("--save-probs", help="also write per-frame probabilities (.npz) here; "
                     "derived from the match data, so keep it out of any public repository")
     args = ap.parse_args()
@@ -71,6 +124,9 @@ def main():
     if ball_cov < MIN_BALL_COVERAGE or players < MIN_PLAYERS:
         sys.exit("tracking coverage too low (ball {:.1%}, {:.1f} players) -- refusing to write a "
                  "submission from it".format(ball_cov, players))
+
+    if args.video_ball:
+        add_video_ball(match, paths, halves)
 
     feats = features.compute(match)
     with open(args.model, "rb") as fh:

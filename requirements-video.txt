@@ -1,0 +1,4 @@
+# Optional: only for `python run.py --video-ball` (mtah/video_ball.py). Install on top of
+# requirements.txt. Classical OpenCV image processing, no learned weights to download.
+-r requirements.txt
+opencv-python-headless==5.0.0.93
