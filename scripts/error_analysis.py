@@ -50,7 +50,7 @@ def main(tag, scenario="default"):
     oracle = {"model": [], "oracle_dead": [], "oracle_team": []}
     for key, (p_dead, p_home, *rest) in sorted(probs.items()):
         p_switch = rest[0] if rest else None
-        sc, game, seed = key.split("_")
+        sc, game, seed = key.rsplit("_", 2)
         if sc != scenario:
             continue
         _, labels, halves = unit_features(int(game), int(seed), sc)

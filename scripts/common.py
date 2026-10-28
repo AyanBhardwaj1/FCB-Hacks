@@ -24,6 +24,12 @@ SCENARIOS = {
     # ...and worse than we expect it to be, as a robustness check
     "harsh": dict(ball_missing=0.55, player_missing=0.15, ball_noise=0.5,
                   player_noise=0.25, spike_rate=0.006, fragment_every_s=15.0),
+    # ceiling studies: the ball almost never lost (what perfect ball detection would be worth)
+    "train_ball": dict(ball_missing=0.03),
+    "default_ball": dict(ball_noise=0.25, player_noise=0.10, player_missing=0.07,
+                         spike_rate=0.002, fragment_every_s=40.0, ball_missing=0.03),
+    "default_ball20": dict(ball_noise=0.25, player_noise=0.10, player_missing=0.07,
+                           spike_rate=0.002, fragment_every_s=40.0, ball_missing=0.20),
 }
 
 # Everything a cached (features, labels) file depends on: change any of these and the cache key

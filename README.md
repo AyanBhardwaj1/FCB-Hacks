@@ -49,6 +49,11 @@ pip install -r requirements.txt
 # 2. produce the submission (uses the committed model in models/)
 python run.py --team <team_name>        # -> submissions/<team_name>.csv, validated
 
+# optional: also search the tactical video for the ball inside tracker gaps (runs locally,
+# ~20-40 min once, cached; merged only if its self-calibration on the video passes)
+pip install -r requirements-video.txt
+python run.py --team <team_name> --video-ball
+
 # optional: retrain the model from the public sample data (fetched automatically)
 python train.py
 # optional: the validation behind the numbers above
@@ -81,6 +86,8 @@ scripts/error_analysis.py   transition-level error breakdown and oracle upper bo
 scripts/dead_analysis.py    dead-ball breakdown: what stopped play, restart type, duration
 scripts/handover_analysis.py  possession-switch breakdown: how the ball changed hands, spell length
 scripts/short_analysis.py   short-possession anatomy: touches, passes, ball visibility, recovery
+scripts/gap_analysis.py     how well the ball can be placed inside tracker gaps (vs the truth)
+mtah/video_ball.py          optional ball detection from the tactical video, inside tracker gaps
 scripts/make_fake_bundle.py   challenge-format stand-in data for smoke tests
 external/more-than-a-hack-2027   the challenge repo (git submodule): scorer, games.py
 tests/                  python -m pytest -q

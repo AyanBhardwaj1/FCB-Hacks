@@ -133,6 +133,43 @@ choosing between designs, and each round's final numbers come from a seed range 
 looked at (201–203, then 301–303). Comparisons are **paired** on identical test units, and every
 arm of a comparison is evaluated with the current degradation code.
 
+**Round 6, the ball in tracker gaps (design seeds 101–103).** Measured first
+(`scripts/gap_analysis.py`, live frames inside gaps, against the true ball): straight-line
+interpolation between sightings places the ball within 0.3–0.9 m, with the right nearest team
+88–95% of the time, for gaps up to 2 s. It drops to 2.8 m / 75% for 2–4 s gaps and is no better
+than chance beyond 8 s. Snapping to the nearest player adds nothing.
+
+- Extending interpolation from 0.4 s to 2 s gaps (with flags for interpolated frames and position
+  in the gap) changed spellF1 by +0.001 ± 0.002 (default) and +0.004 ± 0.004 (harsh). Not shipped.
+  The reason is that interpolation adds no information: it is a function of the last and next
+  sightings, which the model already reads through its time-since/until features.
+- **Ceiling: what real ball detections are worth.** The same pipeline trained and tested with
+  the ball almost never lost (3%) scores 0.807 vs 0.748 (+0.059 ± 0.007, 9/9). The *shipped*
+  model, unchanged, gains **+0.036 ± 0.009** (9/9) when 20% instead of 36–46% of the ball is
+  missing at test time, and +0.063 ± 0.007 at 3%. No retraining is needed to profit from extra
+  sightings. These simulated sightings have the tracker's noise but no false detections.
+- So the lever is an *independent* signal: the video. `mtah/video_ball.py` + `run.py --video-ball`
+  (optional, `requirements-video.txt`) search the tactical video for the ball, only inside
+  tracker gaps and only near where it should be:
+  - search centre and radius from the sightings around the gap, projected through the frame's
+    homography;
+  - a small, bright, low-saturation, round blob of the size a 22 cm ball has at that spot, mapped
+    back to pitch metres;
+  - the existing speed-spike filter downstream.
+
+  It is classical OpenCV with no learned weights, so it is deterministic and inspectable. It
+  **calibrates itself on the real video without any ground truth**: stretches the tracker does
+  see are hidden and searched exactly like gaps, and the detections are compared with the
+  tracked ball. It **fails closed**: detections are merged only if at least 100 probe frames
+  exist, at least 15% are found and at least 80% of those land within 1 m. Results are cached
+  under `cache/` (derived from the licensed video, never committed). Tests run it on synthetic
+  video (a perspective homography, coloured players, a white-shirted decoy, occlusions, MJPG
+  compression): at least 90% of visible-ball frames found within 0.5 m, no detections while the
+  ball is hidden, and only gap frames filled.
+- **Not validated on real footage**: there is no video in the sample data, and the match video
+  cannot be used in a cloud session. Its effect on the real match is unknown until it runs
+  locally, and the calibration report it prints is the evidence to judge it by.
+
 **Round 5, short possessions: no change shipped (design seeds 101–103).** The shipped pipeline
 recovers 52% of possessions under 8 s (IoU ≥ 0.5): 27% under 2 s, 41% at 2–4 s, 70% at 4–8 s
 (`scripts/short_analysis.py`). The anatomy points at the tracking, not the model or decoder:
@@ -276,8 +313,11 @@ Other findings:
   (identity switches, duplicates, systematic loss in aerial play) is only approximated.
 - Short possessions are still the weak spot (52% of those under 8 s recovered), and round 5
   suggests the sample-game tracking often holds no evidence of them: nearly half contain no
-  detectable touch by the possessing team. Better ball detection in tracker gaps (from video)
-  is the likeliest way in.
+  detectable touch by the possessing team. The video detector (round 6) targets exactly that,
+  but it is unvalidated on real footage.
+- The video detector looks for a white ball. A differently coloured ball, heavy motion blur, or
+  a camera view where the ball spans only one or two pixels will lower its recall. The
+  calibration report shows that, and the fail-closed gate then keeps it out.
 - The dead-ball paths are simulated (randomized, but simulated). How well the boundary
   features transfer depends on how the real ATD sees an out-of-play ball, which the sample data
   cannot show.

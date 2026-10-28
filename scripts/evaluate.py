@@ -87,7 +87,7 @@ def rescore(args):
     units = []
     for key, (p_dead, p_home, *rest) in sorted(probs.items()):
         p_switch = rest[0] if rest else None
-        scenario, game, seed = key.split("_")
+        scenario, game, seed = key.rsplit("_", 2)
         _, labels, halves = unit_features(int(game), int(seed), scenario)
         pred = decode.decode(p_dead, p_home, halves, len(labels), prm, p_switch=p_switch)
         spell, macro, n_pred, n_gt = score(labels, pred)
