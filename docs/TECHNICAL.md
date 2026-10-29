@@ -172,8 +172,9 @@ What moved the score (paired, on fresh seeds, details in `docs/DEVLOG.md`):
 
 Measured and **not** shipped: a second-stage context model, Smart Tagging priors, pass and
 steal sequence features, a learned hand-over detector (opt-in `--hand-over`; it raised short
-possession recall but invented as many switches), and longer ball interpolation. None improved
-spellF1 beyond noise.
+possession recall but invented as many switches), longer ball interpolation, and self-training
+on the target match with algorithmic pseudo-labels (+0.001 ± 0.002; the pseudo-labels are wrong
+exactly where the model is). None improved spellF1 beyond noise.
 
 **Error profile** (shipped pipeline, 2 s matching window):
 - 63% of true possession switches are found;
@@ -232,8 +233,8 @@ tracking coverage, so a bad download cannot silently produce a submission.
 - **Video detector.** It is unvalidated on real footage, and a non-white ball or heavy blur will
   lower its recall. Its calibration report shows this, and the fail-closed gate then keeps it out.
 - **Next steps:** a hand-over detector precise enough to beat its false switches (an oracle
-  shows +0.03 available), noise-adaptive touch detection, pseudo-labelling the challenge match
-  itself, and a duration-aware decoder.
+  shows +0.03 available), noise-adaptive touch detection, and a duration-aware decoder.
+  Self-training on the match was tried and gave nothing (§4).
 
 ## 7. Reproduction
 

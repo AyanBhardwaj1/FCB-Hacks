@@ -18,6 +18,18 @@ choosing between designs, and each round's final numbers come from a seed range 
 looked at (201–203, then 301–303). Comparisons are **paired** on identical test units, and every
 arm of a comparison is evaluated with the current degradation code.
 
+**Round 7, self-training on the target match (design seeds 101–103), not shipped.** The rules
+allow pseudo-labels on the provided game when an algorithm produces them, so we tested test-time
+adaptation (`scripts/selftrain_eval.py`). The base models label the held-out game and the decoder
+turns that into possessions. Frames within 1 s of a decoded change, or where the frame model
+disagrees with the decoder, are dropped, which keeps 85% of frames with 93–96% of them right.
+The models are then refit on the training games plus two copies of the pseudo-labelled game.
+Paired against the base model on the same 9 units: **+0.0010 ± 0.0019** spellF1 on `default`
+(better in 5/9) and **+0.0003 ± 0.0037** on `harsh` (4/9), with macroF1 unchanged. The
+pseudo-labels mostly repeat what the model already believes, and where it is wrong (hand-overs)
+they are wrong too, so refitting cannot find the missing switches. Not worth a retrain at
+submission time.
+
 **Round 6, the ball in tracker gaps (design seeds 101–103).** Measured first
 (`scripts/gap_analysis.py`, live frames inside gaps, against the true ball): straight-line
 interpolation between sightings places the ball within 0.3–0.9 m, with the right nearest team
