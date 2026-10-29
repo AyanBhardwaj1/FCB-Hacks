@@ -43,10 +43,11 @@ DATA_PATTERNS = (r"^data/", r"^cache/", r"^submissions/", r"\.mp4$", r"\.npz$", 
 
 def check_team_name(team):
     """The registered team name, as long as it is a plain file name (letters in any script,
-    digits, spaces, '-' and '_'; no path separators, dots or edge spaces)."""
-    if not re.fullmatch(r"(?!\s)[\w \-]{1,64}(?<!\s)", team or ""):
-        raise ValueError("team name {!r}: use 1-64 letters, digits, spaces, '-' or '_' -- it "
-                         "becomes the file names the board is labelled with".format(team))
+    digits, spaces, '-', '_' and parentheses; no path separators, dots or edge spaces)."""
+    if not re.fullmatch(r"(?!\s)[\w \-()]{1,64}(?<!\s)", team or ""):
+        raise ValueError("team name {!r}: use 1-64 letters, digits, spaces, '-', '_' or "
+                         "parentheses -- it becomes the file names the board is labelled "
+                         "with".format(team))
     return team
 
 

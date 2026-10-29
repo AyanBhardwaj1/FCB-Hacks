@@ -68,7 +68,7 @@ def test_run_writes_a_manifest_that_pins_the_file(tmp_path):
 
 def test_team_names_must_be_safe_file_names():
     import package_submission as ps
-    for good in ("fcb_hacks", "Team-7", "AyanBots", "FCB Hacks", "Barça"):
+    for good in ("fcb_hacks", "Team-7", "AyanBots", "FCB Hacks", "Barça", "O(1)Burger"):
         assert ps.check_team_name(good) == good
     for bad in ("", " lead", "trail ", "../x", "a/b", "a.b", "x" * 65):
         with pytest.raises(ValueError):
