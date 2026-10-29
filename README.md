@@ -117,4 +117,5 @@ tests/                  python -m pytest -q
 
 ## Team
 
-Teams must have 3–5 members to be eligible for the Innovation Challenge and the final.
+**O(1)Burger.** Teams must have 3–5 members to be eligible for the Innovation Challenge
+and the final.

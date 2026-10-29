@@ -162,6 +162,13 @@ spellF1 beyond noise.
   when 20% instead of 36–46% of the ball is missing. That is why the optional video detector
   exists.
 
+**Reading the real files.** The FIFA/EPTS reader (`mtah/io.py`) follows the metadata's
+`DataFormatSpecification`. On Metrica's own EPTS export (Sample Game 3) it agrees with `kloppy`,
+the library the challenge's starter code uses, on all 440,000 player and 14,060 ball positions
+checked (differences only at float32 rounding), with no disagreement on when the ball is missing
+and the same home team. `run.py` refuses blank or wrongly formatted files and implausibly low
+tracking coverage, so a bad download cannot silently produce a submission.
+
 **The optional video ball detector** (`mtah/video_ball.py`):
 - **What it does.** It runs classical OpenCV with no learned weights, inside tracker gaps only,
   near where the ball should be (projected through each frame's homography). It looks for a
