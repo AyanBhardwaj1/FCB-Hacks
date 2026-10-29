@@ -9,30 +9,11 @@ Deterministic: same data, same pinned library versions, same model file.
 import argparse
 import os
 import pickle
-import subprocess
 import sys
 import time
 
 from mtah import config, features, sample_games
 from mtah.model import FrameModels
-
-SAMPLE_REPO = "https://github.com/metrica-sports/sample-data"
-# Pinned so a later upstream commit cannot change the retrained model.
-SAMPLE_COMMIT = "e706dd506b360d69d9d123d5b8026e7294b13996"
-
-
-def ensure_sample_data():
-    target = os.path.dirname(sample_games.DEFAULT_DIR)
-    if not os.path.isdir(sample_games.DEFAULT_DIR):
-        print("fetching Metrica sample data into {} ...".format(target))
-        subprocess.check_call(["git", "clone", SAMPLE_REPO, target])
-        subprocess.check_call(["git", "-C", target, "checkout", "-q", SAMPLE_COMMIT])
-    head = subprocess.check_output(["git", "-C", target, "rev-parse", "HEAD"]).decode().strip()
-    if head != SAMPLE_COMMIT:
-        sys.exit("sample data at {} is commit {}, expected {} -- run "
-                 "`git -C {} checkout {}`".format(target, head, SAMPLE_COMMIT, target,
-                                                  SAMPLE_COMMIT))
-
 
 def training_items(seeds):
     items = []
@@ -52,7 +33,7 @@ def main():
     ap.add_argument("--seeds", type=int, nargs="+", default=list(config.TRAIN_SEEDS))
     args = ap.parse_args()
 
-    ensure_sample_data()
+    sample_games.ensure_data()
     t = time.time()
     items = training_items(args.seeds)
     models = FrameModels(spell_weighting=config.SPELL_WEIGHTING,

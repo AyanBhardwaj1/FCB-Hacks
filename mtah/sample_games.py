@@ -17,6 +17,8 @@ Home is the team the files call "Home" (games 1-2) or the first team in the meta
 
 import json
 import os
+import subprocess
+import sys
 
 import numpy as np
 import pandas as pd
@@ -29,6 +31,10 @@ DEFAULT_DIR = os.environ.get("MTAH_SAMPLE_DIR") or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "external", "sample-data", "data")
 
 GAMES = (1, 2, 3)
+
+SAMPLE_REPO = "https://github.com/metrica-sports/sample-data"
+# Pinned so a later upstream commit cannot change the retrained model or the stand-in bundle.
+SAMPLE_COMMIT = "e706dd506b360d69d9d123d5b8026e7294b13996"
 
 # Event types after which the ball is out of play. Subtype strings are matched as substrings.
 DEAD_TYPES = {"BALL OUT", "FAULT RECEIVED"}
@@ -70,6 +76,22 @@ def _events_json(path, home_id):
                     "period": int(ev["period"]), "start": start - 1,
                     "end": max(end, start) - 1})
     return out
+
+
+def ensure_data(data_dir=None):
+    """Clone the sample data at the pinned commit into data_dir's parent if it is missing
+    (~230 MB, needs git), and refuse a checkout at any other commit."""
+    data_dir = data_dir or DEFAULT_DIR
+    target = os.path.dirname(data_dir)
+    if not os.path.isdir(data_dir):
+        print("fetching Metrica sample data into {} (~230 MB) ...".format(target))
+        subprocess.check_call(["git", "clone", SAMPLE_REPO, target])
+        subprocess.check_call(["git", "-C", target, "checkout", "-q", SAMPLE_COMMIT])
+    head = subprocess.check_output(["git", "-C", target, "rev-parse", "HEAD"]).decode().strip()
+    if head != SAMPLE_COMMIT:
+        sys.exit("sample data at {} is commit {}, expected {} -- run "
+                 "`git -C {} checkout {}`".format(target, head, SAMPLE_COMMIT, target,
+                                                  SAMPLE_COMMIT))
 
 
 def load_game(game, data_dir=None):

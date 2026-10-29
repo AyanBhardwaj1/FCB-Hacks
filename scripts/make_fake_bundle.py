@@ -80,6 +80,7 @@ def main():
     target = [(a, b + 1) for _, a, b in games.half_video_blocks(config.GAME)]
     pitch = games.GAMES[config.GAME]["pitch"]
 
+    sample_games.ensure_data()
     match, events = sample_games.load_game(args.game)
     labels = sample_games.labels_from_events(events, match.n_frames, match.halves)
     deg = sample_games.degrade(match, labels, seed=7)
