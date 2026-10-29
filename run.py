@@ -31,6 +31,43 @@ MIN_BALL_COVERAGE = 0.20   # share of graded frames with a ball; the real ATD ha
 MIN_PLAYERS = 10           # mean tracked players on graded frames; the real ATD has 20.5
 
 
+def git_commit():
+    """(HEAD of the repository this code runs from, whether its tracked files are unmodified);
+    ('unknown', False) outside a git checkout."""
+    import subprocess
+
+    def git(*args):
+        return subprocess.check_output(["git", "-C", config.ROOT] + list(args),
+                                       stderr=subprocess.DEVNULL).decode().strip()
+    try:
+        return git("rev-parse", "HEAD"), git("status", "--porcelain", "--untracked-files=no") == ""
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown", False
+
+
+def write_manifest(csv_path, argv, commit=None, clean=None):
+    """<csv>.run.json next to the submission: its SHA-256, the exact command, the code commit and
+    the software environment -- what the organisers need to regenerate the same file, and what
+    scripts/package_submission.py checks before anything is uploaded."""
+    import hashlib
+    import json
+
+    from mtah import env
+
+    with open(csv_path, "rb") as fh:
+        sha = hashlib.sha256(fh.read()).hexdigest()
+    words = [os.path.basename(argv[0])] + list(argv[1:]) if argv else []
+    if commit is None:
+        commit, clean = git_commit()
+    data = {"file": os.path.basename(csv_path), "sha256": sha,
+            "command": " ".join(["python"] + words),
+            "commit": commit, "clean": bool(clean), "environment": env.describe()}
+    path = os.path.splitext(csv_path)[0] + ".run.json"
+    with open(path, "w") as fh:
+        json.dump(data, fh, indent=1)
+    return path
+
+
 def video_cache_key(paths, match, halves):
     """Hash of everything the video detections depend on: the video and homography files, the
     detector's code and OpenCV version, the tracked ball, the halves, pitch and frame rate."""
@@ -178,6 +215,13 @@ def main():
     counts = {k: int(np.sum(labels == k)) for k in "HADX"}
     print("wrote {}  {}  possessions {} (mean {:.1f} s)  ({:.0f}s total)".format(
         out, counts, stats["n_spells"], stats["mean_duration_s"], time.time() - t))
+    manifest = write_manifest(out, sys.argv)
+    from mtah import env
+    drift = env.mismatches(env.pinned(), env.installed(env.pinned()))
+    print("manifest {}{}".format(manifest, "" if not drift else
+                                 "\nWARNING: environment differs from the pinned one ({}); the "
+                                 "organisers may not regenerate this exact file".format(
+                                     "; ".join(drift))))
 
     gt_path = os.path.join(config.CHALLENGE_REPO, "evaluation", "gt",
                            "{}_possession_gt_public.csv".format(config.GAME))

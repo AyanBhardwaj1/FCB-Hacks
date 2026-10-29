@@ -33,21 +33,27 @@ design decision looked at), scored with the challenge's own `possession_metrics.
 The baseline's ~0.20 here is close to its 0.2433 on the real match, which suggests the degraded
 sample games are a fair stand-in. These are **not** competition scores. The real number only
 exists once the organisers score the private full-match ground truth. Details, ablations and error
-analysis are in [docs/TECHNICAL.md](docs/TECHNICAL.md#3-validation).
+analysis are in [docs/TECHNICAL.md](docs/TECHNICAL.md#4-validation); the round-by-round history
+is in [docs/DEVLOG.md](docs/DEVLOG.md).
 
 ## Reproduce
 
 ```bash
 git clone --recursive <this repo> && cd FCB-Hacks      # --recursive pulls the challenge repo
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+python3.13 -m venv .venv && source .venv/bin/activate   # Python 3.13 (see .python-version)
+pip install -r requirements.txt                         # exact pins: the file must regenerate byte for byte
 
 # 1. put the challenge data where the challenge's DATA.md says (never commit it):
 #      data/tactical/BAR-ATH_tactical_atd.xml, ..._atd.txt, ..._smart_tagging.xml
 #    or export MTAH_DATA_DIR=/path/to/bundle
 
 # 2. produce the submission (uses the committed model in models/)
-python run.py --team <team_name>        # -> submissions/<team_name>.csv, validated
+python run.py --team <team_name>        # -> submissions/<team_name>.csv (+ .run.json manifest), validated
+
+# 3. package the deliverables (refuses unless the file is valid, unchanged, made by the pushed,
+#    clean commit, and no match data is tracked) -> submissions/<team_name>.{csv,md}
+git push
+python scripts/package_submission.py --team <team_name>
 
 # optional: also search the tactical video for the ball inside tracker gaps (runs locally,
 # ~20-40 min once, cached; merged only if its self-calibration on the video passes)
@@ -72,7 +78,7 @@ the whole path.
 ## Layout
 
 ```
-run.py                  challenge data -> submissions/<team>.csv (validated)
+run.py                  challenge data -> submissions/<team>.csv (validated) + run manifest
 train.py                public sample games -> models/frame_models.pkl
 mtah/io.py              FIFA/EPTS reader (follows the metadata's DataFormatSpecification), writers
 mtah/features.py        per-frame features from team-level tracking
@@ -89,6 +95,10 @@ scripts/short_analysis.py   short-possession anatomy: touches, passes, ball visi
 scripts/gap_analysis.py     how well the ball can be placed inside tracker gaps (vs the truth)
 mtah/video_ball.py          optional ball detection from the tactical video, inside tracker gaps
 scripts/make_fake_bundle.py   challenge-format stand-in data for smoke tests
+scripts/package_submission.py  pre-upload checks; fills the technical document's placeholders
+mtah/env.py             pinned-environment check recorded in every run manifest
+docs/TECHNICAL.md       the short technical document (submission deliverable)
+docs/DEVLOG.md          every validation round, newest first
 external/more-than-a-hack-2027   the challenge repo (git submodule): scorer, games.py
 tests/                  python -m pytest -q
 ```
@@ -100,8 +110,9 @@ tests/                  python -m pytest -q
 - **Match data never goes into this repository** (`data/`, `cache/`, `submissions/` are
   gitignored) and **never goes to a hosted LLM**, as the terms of use require. The pipeline was
   developed against public sample data only.
-- **Deterministic.** Pinned dependencies, fixed seeds, no early-stopping randomness: the same
-  data and repo give the same file.
+- **Deterministic.** Pinned dependencies and Python version, fixed seeds, no early-stopping
+  randomness: the same data and repo give the same file. `run.py` warns if the environment
+  drifts from the pins and records it next to the file.
 
 ## Team
 
