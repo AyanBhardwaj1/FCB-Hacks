@@ -32,25 +32,26 @@ MIN_PLAYERS = 10           # mean tracked players on graded frames; the real ATD
 
 
 def git_commit():
-    """(HEAD of the repository this code runs from, whether its tracked files are unmodified);
-    ('unknown', False) outside a git checkout."""
+    """(HEAD of the repository this code runs from, whether the working tree is clean -- no
+    modified or untracked, non-ignored files); ('unknown', False) outside a git checkout."""
     import subprocess
 
     def git(*args):
         return subprocess.check_output(["git", "-C", config.ROOT] + list(args),
                                        stderr=subprocess.DEVNULL).decode().strip()
     try:
-        return git("rev-parse", "HEAD"), git("status", "--porcelain", "--untracked-files=no") == ""
+        return git("rev-parse", "HEAD"), git("status", "--porcelain") == ""
     except (OSError, subprocess.CalledProcessError):
         return "unknown", False
 
 
-def write_manifest(csv_path, argv, commit=None, clean=None):
+def write_manifest(csv_path, argv, commit=None, clean=None, requirements=()):
     """<csv>.run.json next to the submission: its SHA-256, the exact command, the code commit and
     the software environment -- what the organisers need to regenerate the same file, and what
     scripts/package_submission.py checks before anything is uploaded."""
     import hashlib
     import json
+    import shlex
 
     from mtah import env
 
@@ -60,8 +61,9 @@ def write_manifest(csv_path, argv, commit=None, clean=None):
     if commit is None:
         commit, clean = git_commit()
     data = {"file": os.path.basename(csv_path), "sha256": sha,
-            "command": " ".join(["python"] + words),
-            "commit": commit, "clean": bool(clean), "environment": env.describe()}
+            "command": shlex.join(["python"] + words),
+            "commit": commit, "clean": bool(clean),
+            "environment": env.describe(*requirements)}
     path = os.path.splitext(csv_path)[0] + ".run.json"
     with open(path, "w") as fh:
         json.dump(data, fh, indent=1)
@@ -215,9 +217,11 @@ def main():
     counts = {k: int(np.sum(labels == k)) for k in "HADX"}
     print("wrote {}  {}  possessions {} (mean {:.1f} s)  ({:.0f}s total)".format(
         out, counts, stats["n_spells"], stats["mean_duration_s"], time.time() - t))
-    manifest = write_manifest(out, sys.argv)
     from mtah import env
-    drift = env.mismatches(env.pinned(), env.installed(env.pinned()))
+    requirements = [env.REQUIREMENTS] + ([env.REQUIREMENTS_VIDEO] if args.video_ball else [])
+    manifest = write_manifest(out, sys.argv, requirements=requirements)
+    pins = env.pinned(*requirements)
+    drift = env.mismatches(pins, env.installed(pins))
     print("manifest {}{}".format(manifest, "" if not drift else
                                  "\nWARNING: environment differs from the pinned one ({}); the "
                                  "organisers may not regenerate this exact file".format(

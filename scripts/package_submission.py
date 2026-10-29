@@ -6,11 +6,12 @@
 
 It refuses, with the reason, unless all of this holds:
 
-  - the team name is a safe file name (the board names each row after the file)
+  - the team name is a usable file name (the board names each row after the file)
   - the CSV passes the challenge's own validator, unchanged since run.py wrote it (its SHA-256
     matches the run manifest)
   - the CSV was produced by the commit the repository is at now, with no uncommitted changes,
-    and that commit is pushed -- otherwise the public repository cannot regenerate the file
+    and that commit is on origin (fetched now) -- otherwise the public repository cannot
+    regenerate the file
   - no match data (ATD, video, homography, Smart Tagging, caches, submissions) is tracked in git
 
 Then it writes, in submissions/ (gitignored):
@@ -35,15 +36,17 @@ sys.path.insert(0, ROOT)
 
 from mtah import config  # noqa: E402
 
-TOKENS = ("TEAM_NAME", "CSV_SHA256", "GIT_COMMIT", "RUN_COMMAND")
+TOKENS = ("TEAM_NAME", "CSV_SHA256", "GIT_COMMIT", "RUN_COMMAND", "REPO_URL")
 DATA_PATTERNS = (r"^data/", r"^cache/", r"^submissions/", r"\.mp4$", r"\.npz$", r"_atd\.",
                  r"homography\.csv$", r"smart_tagging")
 
 
 def check_team_name(team):
-    if not re.match(r"^[A-Za-z0-9_\-]{1,64}$", team or ""):
-        raise ValueError("team name {!r}: use 1-64 letters, digits, '-' or '_' -- it becomes the "
-                         "file names the board is labelled with".format(team))
+    """The registered team name, as long as it is a plain file name (letters in any script,
+    digits, spaces, '-' and '_'; no path separators, dots or edge spaces)."""
+    if not re.fullmatch(r"(?!\s)[\w \-]{1,64}(?<!\s)", team or ""):
+        raise ValueError("team name {!r}: use 1-64 letters, digits, spaces, '-' or '_' -- it "
+                         "becomes the file names the board is labelled with".format(team))
     return team
 
 
@@ -52,24 +55,35 @@ def tracked_data_files(files):
     return [f for f in files if any(re.search(p, f) for p in DATA_PATTERNS)]
 
 
-def fill_doc(text, team, sha, commit, command, required=TOKENS):
-    """The technical document with its placeholders filled; every required one must be there."""
+def fill_doc(text, team, sha, commit, command, repo="", required=TOKENS):
+    """The technical document with its placeholders filled in one pass (a value that happens to
+    contain a token is left alone); every required placeholder must be there."""
     missing = [t for t in required if t not in text]
     if missing:
         raise ValueError("technical document lacks placeholders {}".format(missing))
-    for token, value in zip(TOKENS, (team, sha, commit, command)):
-        text = text.replace(token, value)
-    return text
+    values = dict(zip(TOKENS, (team, sha, commit, command, repo)))
+    return re.sub("|".join(TOKENS), lambda m: values[m.group(0)], text)
+
+
+def repo_url(remote):
+    """A browsable https URL for the origin remote (credentials and .git stripped)."""
+    m = re.match(r"^git@([^:]+):(.+)$", remote)
+    url = "https://{}/{}".format(*m.groups()) if m else re.sub(r"//[^/@]+@", "//", remote)
+    return re.sub(r"\.git$", "", url)
 
 
 def git_state(root=ROOT):
     def git(*args):
         return subprocess.check_output(["git", "-C", root] + list(args)).decode().strip()
+    try:
+        git("fetch", "--quiet", "origin")       # judge "pushed" by origin now, not stale refs
+    except subprocess.CalledProcessError:
+        sys.exit("could not fetch origin to confirm the commit is pushed -- check the network")
     return {"commit": git("rev-parse", "HEAD"),
             "clean": git("status", "--porcelain") == "",
-            "pushed": git("branch", "-r", "--contains", "HEAD") != "",
+            "pushed": git("branch", "-r", "--list", "origin/*", "--contains", "HEAD") != "",
             "tracked": tracked_data_files(git("ls-files").splitlines()),
-            "remote": git("remote", "get-url", "origin")}
+            "remote": repo_url(git("remote", "get-url", "origin"))}
 
 
 def _sha256(path):
@@ -107,8 +121,8 @@ def package(team, csv, doc, out_dir, git):
         sys.exit("run.py ran with uncommitted changes to tracked files, so no commit holds the code "
                  "that made {} -- commit, push and re-run run.py".format(csv))
     if not git["clean"]:
-        sys.exit("the repository has uncommitted changes -- commit and push them, then re-run "
-                 "run.py")
+        sys.exit("the repository has uncommitted changes or untracked files (`git status`) -- "
+                 "commit and push them, or delete them, then re-run run.py")
     if not git["pushed"]:
         sys.exit("commit {} is not pushed -- the organisers cannot see it; git push".format(
             git["commit"]))
@@ -121,7 +135,7 @@ def package(team, csv, doc, out_dir, git):
     if os.path.abspath(out_csv) != os.path.abspath(csv):
         shutil.copyfile(csv, out_csv)
     with open(doc) as fh:
-        text = fill_doc(fh.read(), team, sha, git["commit"], manifest["command"])
+        text = fill_doc(fh.read(), team, sha, git["commit"], manifest["command"], git["remote"])
     out_doc = os.path.join(out_dir, team + ".md")
     with open(out_doc, "w") as fh:
         fh.write(text)
@@ -148,7 +162,8 @@ def main():
     print("all checks passed. For the submission form:")
     print("  Team Name                   {}".format(args.team))
     print("  Possession file             {}".format(paths[0]))
-    print("  Public code repository URL  {}".format(git["remote"]))
+    print("  Public code repository URL  {}  (check it opens in a private browser window)".format(
+        git["remote"]))
     print("  Short technical document    {}  (.md is accepted; export to PDF if you prefer, "
           "named {}.pdf)".format(paths[1], args.team))
     print("  record                      {}".format(paths[2]))

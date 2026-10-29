@@ -1,5 +1,5 @@
 # Pinned so `python run.py` regenerates the same file bit for bit, and so models/frame_models.pkl
-# (a pickled scikit-learn model) loads. Python 3.11+.
+# (a pickled scikit-learn model) loads. Python 3.13 (see .python-version).
 numpy==2.5.3
 pandas==3.0.5
 scikit-learn==1.9.1

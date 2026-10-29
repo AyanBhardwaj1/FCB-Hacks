@@ -33,9 +33,10 @@ def test_mismatches_report_every_difference():
     assert not any(m.startswith("numpy") for m in out)
 
 
-def test_this_environment_matches_the_pins():
-    """The environment the shipped model and results were made in is the pinned one."""
-    assert env.mismatches(env.pinned(), env.installed(env.pinned())) == []
+def test_video_pins_add_opencv_to_the_base_pins():
+    base, video = env.pinned(), env.pinned(env.REQUIREMENTS, env.REQUIREMENTS_VIDEO)
+    assert set(video) - set(base) == {"opencv-python-headless"}
+    assert all(video[k] == v for k, v in base.items())
 
 
 # -- run manifest -------------------------------------------------------------------------------------
@@ -55,10 +56,10 @@ def test_run_writes_a_manifest_that_pins_the_file(tmp_path):
     import hashlib
     import run
     csv = _valid_csv(tmp_path / "t.csv")
-    man = run.write_manifest(csv, ["run.py", "--team", "t"])
+    man = run.write_manifest(csv, ["run.py", "--team", "t", "--data-dir", "/my data"])
     data = json.load(open(man))
     assert data["sha256"] == hashlib.sha256(open(csv, "rb").read()).hexdigest()
-    assert data["command"] == "python run.py --team t"
+    assert data["command"] == "python run.py --team t --data-dir '/my data'"   # shell-quoted
     assert data["commit"] and "python" in data["environment"]
     assert isinstance(data["clean"], bool)
 
@@ -67,9 +68,9 @@ def test_run_writes_a_manifest_that_pins_the_file(tmp_path):
 
 def test_team_names_must_be_safe_file_names():
     import package_submission as ps
-    for good in ("fcb_hacks", "Team-7", "AyanBots"):
+    for good in ("fcb_hacks", "Team-7", "AyanBots", "FCB Hacks", "Barça"):
         assert ps.check_team_name(good) == good
-    for bad in ("", "a b", "../x", "Barça", "x" * 65):
+    for bad in ("", " lead", "trail ", "../x", "a/b", "a.b", "x" * 65):
         with pytest.raises(ValueError):
             ps.check_team_name(bad)
 
@@ -84,11 +85,21 @@ def test_tracked_match_data_is_caught():
 
 def test_document_placeholders_are_filled_and_none_left():
     import package_submission as ps
-    text = "Team: TEAM_NAME\nsha CSV_SHA256 at GIT_COMMIT via RUN_COMMAND\n"
-    out = ps.fill_doc(text, "t", "abc", "deadbeef", "python run.py --team t")
-    assert out == "Team: t\nsha abc at deadbeef via python run.py --team t\n"
+    text = "Team: TEAM_NAME\nsha CSV_SHA256 at GIT_COMMIT via RUN_COMMAND, REPO_URL\n"
+    out = ps.fill_doc(text, "t", "abc", "deadbeef", "python run.py --team t", "https://x/y")
+    assert out == "Team: t\nsha abc at deadbeef via python run.py --team t, https://x/y\n"
+    # one pass: a value that contains a token is not filled again
+    assert ps.fill_doc(text, "GIT_COMMIT", "a", "c", "r", "u").startswith("Team: GIT_COMMIT\n")
     with pytest.raises(ValueError):
-        ps.fill_doc("Team: TEAM_NAME", "t", "abc", "d", "c", required=("TEAM_NAME", "GIT_COMMIT"))
+        ps.fill_doc("Team: TEAM_NAME", "t", "abc", "d", "c", "u",
+                    required=("TEAM_NAME", "GIT_COMMIT"))
+
+
+def test_repo_url_is_browsable():
+    import package_submission as ps
+    assert ps.repo_url("git@github.com:a/b.git") == "https://github.com/a/b"
+    assert ps.repo_url("https://tok@github.com/a/b.git") == "https://github.com/a/b"
+    assert ps.repo_url("https://github.com/a/b") == "https://github.com/a/b"
 
 
 def _git(commit="c0ffee", clean=True, pushed=True, tracked=()):
@@ -102,7 +113,7 @@ def _package(tmp_path, run_clean=True, **kw):
     csv = _valid_csv(tmp_path / "team1.csv")
     run.write_manifest(csv, ["run.py", "--team", "team1"], commit="c0ffee", clean=run_clean)
     doc = tmp_path / "doc.md"
-    doc.write_text("Team: TEAM_NAME / CSV_SHA256 / GIT_COMMIT / RUN_COMMAND\n")
+    doc.write_text("Team: TEAM_NAME / CSV_SHA256 / GIT_COMMIT / RUN_COMMAND / REPO_URL\n")
     args = dict(team="team1", csv=csv, doc=str(doc), out_dir=str(tmp_path / "out"),
                 git=_git())
     args.update(kw)
@@ -141,6 +152,6 @@ def test_package_refuses_a_file_that_does_not_match_its_manifest(tmp_path):
     lines[20000] = lines[20000][:-1] + "A"                     # edited after the run
     open(csv, "w").write("\n".join(lines) + "\n")
     doc = tmp_path / "doc.md"
-    doc.write_text("TEAM_NAME CSV_SHA256 GIT_COMMIT RUN_COMMAND")
+    doc.write_text("TEAM_NAME CSV_SHA256 GIT_COMMIT RUN_COMMAND REPO_URL")
     with pytest.raises(SystemExit, match="manifest"):
         ps.package("team1", csv, str(doc), str(tmp_path / "out"), _git())

@@ -6,7 +6,7 @@
 |---|---|
 | possession file | `TEAM_NAME.csv`, SHA-256 `CSV_SHA256` |
 | produced by | `RUN_COMMAND` at commit `GIT_COMMIT` |
-| repository | this repository (public); regenerate with the command above, see §7 |
+| repository | <REPO_URL> (public); regenerate with the command above, see §7 |
 
 ## Summary
 
@@ -207,7 +207,7 @@ Tested environment: **Python 3.13** on Linux, with the exact package versions in
 `requirements.txt` (`run.py` warns if yours differ and records the environment next to the file).
 
 ```bash
-git clone --recursive https://github.com/AyanBhardwaj1/FCB-Hacks && cd FCB-Hacks
+git clone --recursive REPO_URL && cd FCB-Hacks
 python3.13 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt               # + requirements-video.txt for --video-ball
 export MTAH_DATA_DIR=/path/to/challenge/bundle  # or unpack it into ./data
@@ -215,8 +215,10 @@ RUN_COMMAND                                   # the exact command that produced 
 ```
 
 - **Determinism:** fixed seeds, no randomness at prediction time, pinned packages and pinned
-  sample data. Two runs give byte-identical files, and retraining from scratch (`python train.py`)
-  reproduces the shipped model's output byte for byte. Both are checked by SHA-256.
+  sample data. Two runs give byte-identical files. When the model was committed, retraining it
+  from scratch (`python train.py`) gave the same output byte for byte (compare SHA-256 of the
+  CSV before and after). With `--video-ball` the file also depends on how the installed OpenCV
+  decodes the video, so it is pinned in `requirements-video.txt` and checked like the rest.
 - **Validation:** `scripts/evaluate.py` and `scripts/crossval.py` reproduce §4.
 - **Tests:** `python -m pytest -q`.
 

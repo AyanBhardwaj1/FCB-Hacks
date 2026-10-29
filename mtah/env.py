@@ -14,18 +14,21 @@ from importlib import metadata
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REQUIREMENTS = os.path.join(ROOT, "requirements.txt")
+REQUIREMENTS_VIDEO = os.path.join(ROOT, "requirements-video.txt")   # adds OpenCV for --video-ball
 PYTHON = (3, 13)          # the interpreter the shipped model and results were produced with
 
 
-def pinned(path=REQUIREMENTS):
-    """{package: version} for every `name==version` line of a requirements file."""
+def pinned(*paths):
+    """{package: version} for every `name==version` line of the requirements files (default
+    requirements.txt; `-r` includes are not followed, so pass every file that applies)."""
     out = {}
-    with open(path) as fh:
-        for line in fh:
-            line = line.split("#", 1)[0].strip()
-            m = re.match(r"^([A-Za-z0-9_.\-]+)==([A-Za-z0-9_.+\-]+)$", line)
-            if m:
-                out[m.group(1)] = m.group(2)
+    for path in paths or (REQUIREMENTS,):
+        with open(path) as fh:
+            for line in fh:
+                line = line.split("#", 1)[0].strip()
+                m = re.match(r"^([A-Za-z0-9_.\-]+)==([A-Za-z0-9_.+\-]+)$", line)
+                if m:
+                    out[m.group(1)] = m.group(2)
     return out
 
 
@@ -55,8 +58,8 @@ def mismatches(pins, got, python=None, want_python=PYTHON):
     return out
 
 
-def describe():
-    """The environment, for a run manifest."""
-    pins = pinned()
+def describe(*requirements):
+    """The environment, for a run manifest, against the given requirements files."""
+    pins = pinned(*requirements)
     return {"python": platform.python_version(), "platform": platform.platform(),
             "packages": installed(pins), "drift": mismatches(pins, installed(pins))}

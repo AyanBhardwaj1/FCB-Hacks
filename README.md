@@ -111,7 +111,8 @@ tests/                  python -m pytest -q
   gitignored) and **never goes to a hosted LLM**, as the terms of use require. The pipeline was
   developed against public sample data only.
 - **Deterministic.** Pinned dependencies and Python version, fixed seeds, no early-stopping
-  randomness: the same data and repo give the same file. `run.py` warns if the environment
+  randomness: the same data and repo give the same file. (With `--video-ball` that also needs
+  the pinned OpenCV, since a different video decoder can see slightly different pixels.) `run.py` warns if the environment
   drifts from the pins and records it next to the file.
 
 ## Team
