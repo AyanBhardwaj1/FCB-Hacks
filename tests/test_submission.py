@@ -155,3 +155,30 @@ def test_package_refuses_a_file_that_does_not_match_its_manifest(tmp_path):
     doc.write_text("TEAM_NAME CSV_SHA256 GIT_COMMIT RUN_COMMAND REPO_URL")
     with pytest.raises(SystemExit, match="manifest"):
         ps.package("team1", csv, str(doc), str(tmp_path / "out"), _git())
+
+
+# -- input preflight ----------------------------------------------------------------------------------
+
+def test_preflight_names_a_blank_or_wrong_input_file_without_printing_it(tmp_path):
+    import run
+    xml, txt = tmp_path / "a_atd.xml", tmp_path / "a_atd.txt"
+    xml.write_bytes(b"\xef\xbb\xbf  <?xml version='1.0'?><Main/>")
+    txt.write_text("1:NaN,NaN;0.5,0.5:0.4,0.6,0\n")
+    assert run.check_inputs(str(xml), str(txt)) is None                     # BOM and spaces ok
+
+    xml.write_bytes(b"\0" * 5000)                                          # failed download
+    with pytest.raises(SystemExit, match="blank.*download"):
+        run.check_inputs(str(xml), str(txt))
+    xml.write_bytes(b"")
+    with pytest.raises(SystemExit, match="empty"):
+        run.check_inputs(str(xml), str(txt))
+    xml.write_bytes(b"\x1f\x8b\x08secret")                                 # not XML
+    with pytest.raises(SystemExit, match="not an XML") as exc:
+        run.check_inputs(str(xml), str(txt))
+    assert "secret" not in str(exc.value)
+
+    xml.write_bytes(b"<Main/>")
+    txt.write_text("PRIVATE header line\n1:...\n")                          # not frame records
+    with pytest.raises(SystemExit, match="frame records") as exc:
+        run.check_inputs(str(xml), str(txt))
+    assert "PRIVATE" not in str(exc.value)

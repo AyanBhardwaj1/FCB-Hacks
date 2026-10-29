@@ -18,6 +18,7 @@ as a pipeline check, not a tuning signal.
 import argparse
 import os
 import pickle
+import re
 import sys
 import time
 
@@ -68,6 +69,26 @@ def write_manifest(csv_path, argv, commit=None, clean=None, requirements=()):
     with open(path, "w") as fh:
         json.dump(data, fh, indent=1)
     return path
+
+
+def check_inputs(meta_path, raw_path):
+    """Stop with a plain reason if an ATD file is empty, blank or not the expected format -- what a
+    failed download or unzip leaves behind. Never echoes file contents (they are licensed)."""
+    hint = ("the download or unzip failed -- download the file again, on its own rather than as "
+            "a folder zip, and check `file <path>` reports text")
+    for path, kind in ((meta_path, "xml"), (raw_path, "txt")):
+        with open(path, "rb") as fh:
+            head = fh.read(4096)
+        if not head:
+            sys.exit("{} is empty: {}".format(path, hint))
+        if not head.strip(b"\0"):
+            sys.exit("{} is blank (all zero bytes): {}".format(path, hint))
+        text = head.lstrip(b"\xef\xbb\xbf").lstrip()
+        if kind == "xml" and not text.startswith(b"<"):
+            sys.exit("{} is not an XML file: {}".format(path, hint))
+        if kind == "txt" and not re.match(rb"\d+:", text):
+            sys.exit("{} does not start with ATD frame records ('<frame_id>:...'): {}".format(
+                path, hint))
 
 
 def video_cache_key(paths, match, halves):
@@ -162,6 +183,7 @@ def main():
         if not os.path.isfile(paths[key]):
             sys.exit("missing {}\nUnpack the challenge data into {} (see the challenge's DATA.md)"
                      " or pass --data-dir.".format(paths[key], args.data_dir))
+    check_inputs(paths["atd_meta"], paths["atd_raw"])
 
     n_frames = games.source_frames("tactical", config.GAME)
     halves = [(a, b + 1) for _, a, b in games.half_video_blocks(config.GAME)]
