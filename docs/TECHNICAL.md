@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | possession file | `TEAM_NAME.csv`, SHA-256 `CSV_SHA256` |
-| produced by | `RUN_COMMAND` at commit `GIT_COMMIT` |
+| produced by | `RUN_COMMAND` at commit `GIT_COMMIT`, RUN_PLATFORM |
 | repository | <REPO_URL> (public); regenerate with the command above, see §7 |
 
 ## Summary
@@ -68,12 +68,32 @@ natively):
 - **Costs:** a fixed cost for every switch (64), stop (40) and restart (40). A deflection or a
   won header is a few frames of evidence and doesn't pay for a switch; sustained control does.
 - **Two structural rules keep "dead" honest:**
-  - a stoppage lasts at least 1 s (1 in 850 real stoppages is shorter);
+  - a stoppage lasts at least 1 s (2 of the 281 stoppages in the sample games are shorter);
   - a hand-over always costs at least 16 less than a stop plus a restart.
 
   Without them the decoder can hand possession over through fake stoppages, which flatters
   spellF1 while labelling live play dead. This is exact (O(1) per frame) and checked against
   brute force.
+
+**Missing and noisy tracking** is the core difficulty (the ball is absent on 41% of graded frames),
+and it is handled at every stage rather than patched once:
+
+- **No identities.** The ATD's 46 slots are tracklets, not players, so every feature is
+  team-level: nearest player per team, counts within a radius, team shape. Nothing depends on
+  following one player.
+- **Ball gaps.** Gaps up to 10 frames (0.4 s) are interpolated. Longer ones stay missing, and the
+  trees route missing values natively instead of trusting an invented position. Features say
+  how long the current gap is and what happened at its edges: who touched the ball last and
+  next, where the last-seen path would have left the pitch, whether play slowed down.
+- **Evidence that survives gaps.** Touches, control episodes and team-shape turnovers are
+  measured where the ball is visible and carried across the gap as "time since / until", so a
+  possession change hidden in a gap is still bracketed by evidence on both sides.
+- **Training on the same kind of damage.** The models only ever see tracking degraded like the
+  challenge's (ball missing in bursts, dropouts, fragments, noise, false detections), with the
+  noise level randomized per copy because the real level is unknown (§3).
+- **The decoder smooths what is left.** One noisy frame cannot pay for a change of state.
+- **Bad input stops the run.** `run.py` refuses files that are blank or wrongly formatted, and
+  tracking far below the published coverage (ball on < 20% of graded frames or < 10 players).
 
 ## 2. Assets used and dropped
 
@@ -100,9 +120,10 @@ anonymised professional matches with tracking at 25 fps and event data:
 | Sample Game 3 | 143,761 | 96 | 3,620 | 295 | 96 |
 | **total** | **429,923** | **287** | **7,300** | **815** | **288** |
 
-- **Who labelled what.** The events were produced and published by Metrica Sports. We did not
-  label anything: frame labels are derived from those events **mechanically**, by code in
-  `mtah/sample_games.py`:
+- **Who labelled what.** The event data are Metrica Sports' own annotations of these three
+  other matches (human-produced, as far as we know), published openly by Metrica. RULES.md allows
+  labelled data from other games in any amount. Our team labelled nothing: frame labels are
+  derived from those events **mechanically**, by code in `mtah/sample_games.py`:
   - **possession:** the team of the latest controlling event (pass, carry, set piece, shot,
     recovery). Challenges don't move possession.
   - **controlled possession:** a spell stands only with a completed pass, shot or set piece, a
@@ -119,7 +140,8 @@ anonymised professional matches with tracking at 25 fps and event data:
   - a speed channel is synthesised.
 
   The noise level is randomized for each training copy, since the real ATD's level is unknown.
-  Each game is degraded with four seeds, giving about 1.7 M training frames.
+  Each game is degraded with four seeds: about 1.7 M frames, of which every 4th is used
+  (neighbouring frames are near-duplicates), each seen from both teams' points of view.
 
 ## 4. Validation
 
@@ -191,7 +213,12 @@ tracking coverage, so a bad download cannot silently produce a submission.
 - **Dead ball:** recognised from the ball outside the lines, a still and unattended ball,
   collective slowdown, long tracker gaps and the kickoff shape. Every stoppage lasts at least
   1 s, and each restart starts a new possession.
-- **Outside the halves:** frames outside the two graded halves are `X`.
+- **Frame alignment:** the ATD's `frame_id` 1 is video frame 0, so row *i* of the file is ATD
+  record *i* + 1 (the starter code's convention). Halves come from the published
+  `games.half_video_blocks`.
+- **Abstaining:** frames outside the two halves are `X`. Inside them the decoder always commits
+  to `H`, `A` or `D`: spellF1 would replace an `X` with the previous label anyway, and macroF1
+  counts it as a miss, so abstaining never helps.
 
 ## 6. Limitations
 
@@ -221,13 +248,17 @@ export MTAH_DATA_DIR=/path/to/challenge/bundle  # or unpack it into ./data
 RUN_COMMAND                                   # the exact command that produced the file
 ```
 
+- **Same-output check without match data:** `python scripts/make_fake_bundle.py`, then
+  `python run.py --data-dir cache/fake_data --out check.csv`. That builds a stand-in bundle in the
+  challenge's format from Metrica's public sample data. The file's SHA-256 should start
+  `7a51203b824eba14`, as it does on Linux x86-64 and macOS x86-64 with the pinned environment.
 - **Determinism:** fixed seeds, no randomness at prediction time, pinned packages and pinned
   sample data. Two runs give byte-identical files. When the model was committed, retraining it
   from scratch (`python train.py`) gave the same output byte for byte (compare SHA-256 of the
   CSV before and after). With `--video-ball` the file also depends on how the installed OpenCV
   decodes the video, so it is pinned in `requirements-video.txt` and checked like the rest.
 - **Validation:** `scripts/evaluate.py` and `scripts/crossval.py` reproduce §4.
-- **Tests:** `python -m pytest -q`.
+- **Tests:** `pip install -r requirements-dev.txt && python -m pytest -q tests`.
 
 **Rules compliance.**
 - No hand labels, and no human-produced data about the competition match.

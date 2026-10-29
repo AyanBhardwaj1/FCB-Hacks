@@ -39,26 +39,35 @@ is in [docs/DEVLOG.md](docs/DEVLOG.md).
 ## Reproduce
 
 ```bash
-git clone --recursive <this repo> && cd FCB-Hacks      # --recursive pulls the challenge repo
-python3.13 -m venv .venv && source .venv/bin/activate   # Python 3.13 (see .python-version)
-pip install -r requirements.txt                         # exact pins: the file must regenerate byte for byte
+git clone --recursive https://github.com/AyanBhardwaj1/FCB-Hacks && cd FCB-Hacks
+git submodule update --init      # only if you cloned without --recursive (pulls the challenge repo)
+# Python 3.13 (see .python-version), either of:
+python3.13 -m venv .venv && source .venv/bin/activate
+conda create -y -n fcb python=3.13 && conda activate fcb      # if python3.13 is not installed
+pip install -r requirements.txt  # exact pins: the file must regenerate byte for byte
 
-# 1. put the challenge data where the challenge's DATA.md says (never commit it):
-#      data/tactical/BAR-ATH_tactical_atd.xml, ..._atd.txt, ..._smart_tagging.xml
-#    or export MTAH_DATA_DIR=/path/to/bundle
+# 0. optional, no match data needed: check this machine makes the same file as ours
+python scripts/make_fake_bundle.py                 # stand-in bundle from Metrica's public data
+python run.py --data-dir cache/fake_data --out /tmp/check.csv
+shasum -a 256 /tmp/check.csv                       # expect 7a51203b824eba14...
+
+# 1. put the challenge data in THIS repo's data/ (not the challenge repo's; never commit it).
+#    Only two files are needed -- download them one by one, not as a folder zip:
+#      data/tactical/BAR-ATH_tactical_atd.xml, data/tactical/BAR-ATH_tactical_atd.txt
+#    or export MTAH_DATA_DIR=/path/to/bundle (the folder that contains tactical/)
 
 # 2. produce the submission (uses the committed model in models/)
-python run.py --team <team_name>        # -> submissions/<team_name>.csv (+ .run.json manifest), validated
+python run.py --team "O(1)Burger"       # -> submissions/O(1)Burger.csv (+ .run.json manifest), validated
 
 # 3. package the deliverables (refuses unless the file is valid, unchanged, made by the pushed,
-#    clean commit, and no match data is tracked) -> submissions/<team_name>.{csv,md}
-git push
-python scripts/package_submission.py --team <team_name>
+#    clean commit, and no match data is tracked) -> submissions/O(1)Burger.{csv,md}
+#    (keep the quotes: the parentheses in the team name mean something to the shell)
+python scripts/package_submission.py --team "O(1)Burger"
 
 # optional: also search the tactical video for the ball inside tracker gaps (runs locally,
 # ~20-40 min once, cached; merged only if its self-calibration on the video passes)
 pip install -r requirements-video.txt
-python run.py --team <team_name> --video-ball
+python run.py --team "O(1)Burger" --video-ball
 
 # optional: retrain the model from the public sample data (fetched automatically)
 python train.py
@@ -100,7 +109,7 @@ mtah/env.py             pinned-environment check recorded in every run manifest
 docs/TECHNICAL.md       the short technical document (submission deliverable)
 docs/DEVLOG.md          every validation round, newest first
 external/more-than-a-hack-2027   the challenge repo (git submodule): scorer, games.py
-tests/                  python -m pytest -q
+tests/                  pip install -r requirements-dev.txt; python -m pytest -q tests
 ```
 
 ## Rules we hold ourselves to
@@ -117,5 +126,5 @@ tests/                  python -m pytest -q
 
 ## Team
 
-**O(1)Burger.** Teams must have 3–5 members to be eligible for the Innovation Challenge
-and the final.
+**O(1)Burger.** Members: _add the 3–5 registered names here_. Teams must have 3–5 members to
+be eligible for the Innovation Challenge and the final.

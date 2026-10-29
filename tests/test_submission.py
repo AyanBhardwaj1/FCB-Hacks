@@ -85,11 +85,11 @@ def test_tracked_match_data_is_caught():
 
 def test_document_placeholders_are_filled_and_none_left():
     import package_submission as ps
-    text = "Team: TEAM_NAME\nsha CSV_SHA256 at GIT_COMMIT via RUN_COMMAND, REPO_URL\n"
-    out = ps.fill_doc(text, "t", "abc", "deadbeef", "python run.py --team t", "https://x/y")
-    assert out == "Team: t\nsha abc at deadbeef via python run.py --team t, https://x/y\n"
+    text = "Team: TEAM_NAME\nsha CSV_SHA256 at GIT_COMMIT via RUN_COMMAND, REPO_URL, RUN_PLATFORM\n"
+    out = ps.fill_doc(text, "t", "abc", "deadbeef", "python run.py --team t", "https://x/y", "mac")
+    assert out == "Team: t\nsha abc at deadbeef via python run.py --team t, https://x/y, mac\n"
     # one pass: a value that contains a token is not filled again
-    assert ps.fill_doc(text, "GIT_COMMIT", "a", "c", "r", "u").startswith("Team: GIT_COMMIT\n")
+    assert ps.fill_doc(text, "GIT_COMMIT", "a", "c", "r", "u", "p").startswith("Team: GIT_COMMIT\n")
     with pytest.raises(ValueError):
         ps.fill_doc("Team: TEAM_NAME", "t", "abc", "d", "c", "u",
                     required=("TEAM_NAME", "GIT_COMMIT"))
@@ -113,7 +113,7 @@ def _package(tmp_path, run_clean=True, **kw):
     csv = _valid_csv(tmp_path / "team1.csv")
     run.write_manifest(csv, ["run.py", "--team", "team1"], commit="c0ffee", clean=run_clean)
     doc = tmp_path / "doc.md"
-    doc.write_text("Team: TEAM_NAME / CSV_SHA256 / GIT_COMMIT / RUN_COMMAND / REPO_URL\n")
+    doc.write_text("Team: TEAM_NAME / CSV_SHA256 / GIT_COMMIT / RUN_COMMAND / REPO_URL / RUN_PLATFORM\n")
     args = dict(team="team1", csv=csv, doc=str(doc), out_dir=str(tmp_path / "out"),
                 git=_git())
     args.update(kw)
@@ -152,7 +152,7 @@ def test_package_refuses_a_file_that_does_not_match_its_manifest(tmp_path):
     lines[20000] = lines[20000][:-1] + "A"                     # edited after the run
     open(csv, "w").write("\n".join(lines) + "\n")
     doc = tmp_path / "doc.md"
-    doc.write_text("TEAM_NAME CSV_SHA256 GIT_COMMIT RUN_COMMAND REPO_URL")
+    doc.write_text("TEAM_NAME CSV_SHA256 GIT_COMMIT RUN_COMMAND REPO_URL RUN_PLATFORM")
     with pytest.raises(SystemExit, match="manifest"):
         ps.package("team1", csv, str(doc), str(tmp_path / "out"), _git())
 

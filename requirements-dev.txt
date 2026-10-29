@@ -1,0 +1,4 @@
+-r requirements.txt
+# For the tests and lint only; not needed to produce a submission.
+pytest==9.1.1
+pyflakes==4.0.3

@@ -16,7 +16,7 @@ Transition costs: switch (H <-> A), stop (H/A -> D), restart (D -> H/A).
 
 Minimum dead-ball duration (`min_dead` frames): a stoppage between two stretches of play must
 last at least that long (one at the very start or end of a half is exempt). Real stoppages do:
-in the sample games 1 in 850 is shorter than 1.1 s. Without it, whenever switch > stop + restart
+in the sample games 2 of 281 are shorter than 1 s. Without it, whenever switch > stop + restart
 the decoder hands possession over through a one-frame fake stoppage (H -> D -> A) instead of a
 switch, so the switch cost silently stops meaning anything.
 """

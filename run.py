@@ -214,6 +214,9 @@ def main():
     p_switch = models.predict_switch(feats) if hasattr(models, "predict_switch") else None
 
     extra = None
+    if args.tags and not os.path.isfile(paths.get("smart_tagging", "")):
+        print("WARNING: --tags given but no Smart Tagging file at {} -- running without "
+              "it".format(paths.get("smart_tagging")))
     if args.tags and os.path.isfile(paths.get("smart_tagging", "")):
         meta = read_epts_meta(paths["atd_meta"])
         home_name, away_name = meta["team_names"]

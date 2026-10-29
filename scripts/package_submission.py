@@ -36,7 +36,7 @@ sys.path.insert(0, ROOT)
 
 from mtah import config  # noqa: E402
 
-TOKENS = ("TEAM_NAME", "CSV_SHA256", "GIT_COMMIT", "RUN_COMMAND", "REPO_URL")
+TOKENS = ("TEAM_NAME", "CSV_SHA256", "GIT_COMMIT", "RUN_COMMAND", "REPO_URL", "RUN_PLATFORM")
 DATA_PATTERNS = (r"^data/", r"^cache/", r"^submissions/", r"\.mp4$", r"\.npz$", r"_atd\.",
                  r"homography\.csv$", r"smart_tagging")
 
@@ -56,13 +56,13 @@ def tracked_data_files(files):
     return [f for f in files if any(re.search(p, f) for p in DATA_PATTERNS)]
 
 
-def fill_doc(text, team, sha, commit, command, repo="", required=TOKENS):
+def fill_doc(text, team, sha, commit, command, repo="", platform="", required=TOKENS):
     """The technical document with its placeholders filled in one pass (a value that happens to
     contain a token is left alone); every required placeholder must be there."""
     missing = [t for t in required if t not in text]
     if missing:
         raise ValueError("technical document lacks placeholders {}".format(missing))
-    values = dict(zip(TOKENS, (team, sha, commit, command, repo)))
+    values = dict(zip(TOKENS, (team, sha, commit, command, repo, platform)))
     return re.sub("|".join(TOKENS), lambda m: values[m.group(0)], text)
 
 
@@ -136,7 +136,10 @@ def package(team, csv, doc, out_dir, git):
     if os.path.abspath(out_csv) != os.path.abspath(csv):
         shutil.copyfile(csv, out_csv)
     with open(doc) as fh:
-        text = fill_doc(fh.read(), team, sha, git["commit"], manifest["command"], git["remote"])
+        envr = manifest.get("environment") or {}
+        text = fill_doc(fh.read(), team, sha, git["commit"], manifest["command"], git["remote"],
+                        "Python {} on {}".format(envr.get("python", "?"),
+                                                 envr.get("platform", "?")))
     out_doc = os.path.join(out_dir, team + ".md")
     with open(out_doc, "w") as fh:
         fh.write(text)

@@ -26,7 +26,7 @@ SPELL_WEIGHTING = True
 
 # Train the hand-over detector (mtah/model.near_switch) and let it lower the decoder's switch cost
 # where a possession change is likely (mtah/decode.switch_costs). Off: on the design seeds it did
-# not improve spellF1 (docs/TECHNICAL.md, round 5).
+# not improve spellF1 (docs/DEVLOG.md).
 HAND_OVER = False
 
 # Detector weights tuned on degradation seed 100; applied by decoder() whenever the detector is on.
