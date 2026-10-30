@@ -14,6 +14,7 @@ except for five minutes, which the rules say not to tune on.
 
 import argparse
 import itertools
+import json
 import os
 import pickle
 import sys
@@ -64,6 +65,11 @@ def main():
     ap.add_argument("--oof", default=os.path.join(ROOT, "cache", "oof.pkl"))
     ap.add_argument("--train-seeds", type=int, nargs="+", default=[1, 2])
     ap.add_argument("--test-seed", type=int, default=100)
+    ap.add_argument("--gb-params", type=json.loads, default=None,
+                    help='overrides of the gradient-boosting settings as JSON (default: '
+                         'mtah/model.GB_PARAMS)')
+    ap.add_argument("--grid", type=json.loads, default=None,
+                    help='decoder grid as JSON, e.g. \'{"switch": [48, 64]}\' (default: built in)')
     args = ap.parse_args()
     train_seeds = args.train_seeds[:1] if args.quick else args.train_seeds
 
@@ -80,7 +86,8 @@ def main():
         train = [data[(g, s)] + (g,) for g in sample_games.GAMES if g != held
                  for s in train_seeds]
         t = time.time()
-        models = FrameModels(stage2=args.stage2, exclude=args.exclude, hand_over=args.hand_over,
+        models = FrameModels(gb_params=args.gb_params, stage2=args.stage2, exclude=args.exclude,
+                             hand_over=args.hand_over,
                              spell_weighting=args.spell_weighting).fit(train)
         feats, labels, halves = data[(held, args.test_seed)]
         p_dead, p_home = models.predict(feats, halves)
@@ -110,6 +117,8 @@ def main():
                     hand_q=[0.05])
     if args.quick:
         grid = dict(a_team=[1.0], switch=[8, 16, 32, 64], stop=[8, 16, 32], restart=[8, 16, 32])
+    if args.grid:
+        grid = args.grid
     rows = []
     keys = list(grid)
     for combo in itertools.product(*[grid[k] for k in keys]):
