@@ -141,6 +141,29 @@ def _parse_lines(lines, n_cols):
     return frame.to_numpy()
 
 
+def _expand_bare_nan(lines, slot_sizes, ball_size):
+    """Lines whose missing groups are written as one bare 'NaN' (or left empty) rewritten with one
+    NaN per channel, as the format spec lays them out. Lines that already match are untouched,
+    and anything else is left for _parse_lines to reject -- this never guesses a column."""
+    want = 1 + sum(slot_sizes) + ball_size
+
+    def group(text, size):
+        return ",".join(["NaN"] * size) if text.strip().lower() in ("nan", "") else text
+
+    out = []
+    for ln in lines:
+        if ln.count(",") + ln.count(";") + ln.count(":") + 1 != want:
+            parts = ln.rstrip("\n").split(":")
+            if len(parts) == 3:
+                slots = parts[1].split(";")
+                if len(slots) == len(slot_sizes):
+                    ln = "{}:{}:{}\n".format(
+                        parts[0], ";".join(group(g, n) for g, n in zip(slots, slot_sizes)),
+                        group(parts[2], ball_size) if ball_size else parts[2])
+        out.append(ln)
+    return out
+
+
 def _channel_target(chan, x, y, speed):
     """Which array a channel id fills. Tolerant of naming: 'x', 'player3_x', 'speed', 's'."""
     name = (chan or "").lower().rsplit("_", 1)[-1]
@@ -167,7 +190,7 @@ def load_epts(meta_path, raw_path, pitch=None, n_frames=None, name=""):
 
     with open(raw_path) as handle:
         lines = handle.readlines()
-    lines = [ln if ln.endswith("\n") else ln + "\n" for ln in lines if ln.strip()]
+    lines = [ln.rstrip() + "\n" for ln in lines if ln.strip()]     # CRLF, trailing spaces
     ids = np.array([int(ln[:ln.index(":")]) for ln in lines])
     if n_frames is None:
         n_frames = int(ids.max())
@@ -200,8 +223,10 @@ def load_epts(meta_path, raw_path, pitch=None, n_frames=None, name=""):
         sel = np.flatnonzero((ids >= block["start"]) & (ids <= block["end"]))
         if not len(sel):
             continue
-        n_cols = 1 + sum(len(ch) for _, ch in block["slots"]) + len(block["ball"])
-        data = _parse_lines([lines[i] for i in sel], n_cols)
+        sizes = [len(ch) for _, ch in block["slots"]]
+        n_cols = 1 + sum(sizes) + len(block["ball"])
+        data = _parse_lines(_expand_bare_nan([lines[i] for i in sel], sizes, len(block["ball"])),
+                            n_cols)
         rows = data[:, 0].astype(np.int64) - 1
         col = 1
         for pid, chans in block["slots"]:

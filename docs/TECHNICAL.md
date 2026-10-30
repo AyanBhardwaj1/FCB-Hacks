@@ -189,8 +189,11 @@ exactly where the model is). None improved spellF1 beyond noise.
 `DataFormatSpecification`. On Metrica's own EPTS export (Sample Game 3) it agrees with `kloppy`,
 the library the challenge's starter code uses, on all 440,000 player and 14,060 ball positions
 checked (differences only at float32 rounding), with no disagreement on when the ball is missing
-and the same home team. `run.py` refuses blank or wrongly formatted files and implausibly low
-tracking coverage, so a bad download cannot silently produce a submission.
+and the same home team. It gives the identical file whether lines end in LF or CRLF, carry
+trailing spaces or a byte-order mark, arrive out of order, or write a missing player or ball as one
+bare `NaN` instead of one per channel. The output is also identical with 1 to 4 CPU threads.
+`run.py` refuses blank or wrongly formatted files and implausibly low tracking coverage, so a bad
+download cannot silently produce a submission.
 
 **The optional video ball detector** (`mtah/video_ball.py`):
 - **What it does.** It runs classical OpenCV with no learned weights, inside tracker gaps only,

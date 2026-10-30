@@ -109,6 +109,24 @@ def test_load_epts_follows_the_format_spec(tmp_path):
     assert np.isnan(m.x[3]).all()        # no record for frame 4
 
 
+def test_load_epts_accepts_bare_nan_groups_and_trailing_space(tmp_path):
+    """A missing player or ball may be written as one bare 'NaN' instead of one per channel, and
+    lines may carry trailing whitespace or CRLF; both must parse to the same values."""
+    meta, raw = tmp_path / "m.xml", tmp_path / "r.txt"
+    meta.write_text(META)
+    raw.write_text(RAW)
+    ref = load_epts(str(meta), str(raw), n_frames=4)
+    variant = RAW.replace("2:NaN,NaN,NaN;0.6,0.5,2.5:NaN,NaN,NaN", "2:NaN;0.6,0.5,2.5:NaN")
+    raw.write_bytes(variant.replace("\n", "  \r\n").encode())
+    m = load_epts(str(meta), str(raw), n_frames=4)
+    for a, b in ((ref.x, m.x), (ref.y, m.y), (ref.speed, m.speed), (ref.ball_x, m.ball_x)):
+        assert np.array_equal(a, b, equal_nan=True)
+    # anything else still has to match the spec exactly
+    raw.write_text(RAW.replace("0.6,0.5,2.5", "0.6,0.5"))
+    with pytest.raises(ValueError, match="fields"):
+        load_epts(str(meta), str(raw), n_frames=4)
+
+
 def test_write_submission_validates(tmp_path):
     games, pm = config.challenge_modules()
     n = games.source_frames("tactical", config.GAME)
