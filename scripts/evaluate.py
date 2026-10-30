@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
 from common import CODE_HASH, score, unit_features  # noqa: E402
 from mtah import config, decode, sample_games  # noqa: E402
-from mtah.model import FrameModels  # noqa: E402
+from mtah.model import TRAIN_STRIDE, FrameModels  # noqa: E402
 
 EVAL_DIR = os.path.join(config.CACHE_DIR, "eval")
 
@@ -44,7 +44,8 @@ def run(args):
     for held in sample_games.GAMES:
         train = [unit_features(g, s, args.train_scenario) + (g,)
                  for g in sample_games.GAMES if g != held for s in args.train_seeds]
-        models = FrameModels(stage2=args.stage2, exclude=args.exclude, hand_over=args.hand_over,
+        models = FrameModels(gb_params=args.gb_params, stride=args.stride, stage2=args.stage2,
+                             exclude=args.exclude, hand_over=args.hand_over,
                              spell_weighting=args.spell_weighting).fit(train)
         del train
         for scenario in args.scenarios:
@@ -147,6 +148,11 @@ def main():
                          "shipped, config.HAND_OVER)")
     ap.add_argument("--no-hand-over", dest="hand_over", action="store_false")
     ap.add_argument("--stage2", action="store_true")
+    ap.add_argument("--gb-params", type=json.loads, default=None,
+                    help='overrides of the gradient-boosting settings as JSON, e.g. '
+                         '\'{"max_iter": 600}\' (default: mtah/model.GB_PARAMS)')
+    ap.add_argument("--stride", type=int, default=TRAIN_STRIDE,
+                    help="use every n-th training frame (default: mtah/model.TRAIN_STRIDE)")
     ap.add_argument("--decoder", type=json.loads, default=None,
                     help='decoder costs as JSON, e.g. \'{"switch": 16}\' (default: config)')
     ap.add_argument("--compare", nargs=2, metavar=("A", "B"))
