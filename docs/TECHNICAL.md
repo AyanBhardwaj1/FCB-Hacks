@@ -18,10 +18,10 @@ models learn from Metrica's three public sample games, whose tracking is degrade
 the challenge's automatic ATD.
 
 On those games (leave one game out, unseen degradation seeds, scored with the challenge's own
-`possession_metrics.py`) the pipeline reaches **spellF1 0.758 ± 0.014** (macroF1 0.904). The
+`possession_metrics.py`) the pipeline reaches **spellF1 0.768 ± 0.009** (macroF1 0.910). The
 challenge's baseline method scores ≈ 0.20 on the same data, against 0.2433 on the real match.
 That match is the main evidence that the degraded games are a fair stand-in. On tracking worse
-than we expect the real data to be, spellF1 is 0.699 ± 0.015. These are not competition scores.
+than we expect the real data to be, spellF1 is 0.715 ± 0.024. These are not competition scores.
 
 ## 1. Approach
 
@@ -58,6 +58,9 @@ natively):
   frame is seen from both teams' points of view, and at prediction
   P(H) = ½·(f(home view) + 1 − f(away view)). Swapping the teams' tracking swaps the answer
   exactly, so nothing about "the home side" carries over from training.
+- **Settings:** 600 boosting rounds, 31 leaves, learning rate 0.05, at least 400 frames per leaf.
+  Capacity was chosen by paired leave-one-game-out comparison (round 8 in `docs/DEVLOG.md`).
+  300 rounds underfit, while larger trees, fewer leaves and denser training frames did not help.
 - **Possession-equal weights.** spellF1 counts every possession once, so the possession model
   weights each training frame by 8 s ÷ the length of its possession (clipped to [0.25, 4]).
   Without this, short possessions, half of all possessions, are drowned out.
@@ -140,7 +143,7 @@ anonymised professional matches with tracking at 25 fps and event data:
   - a speed channel is synthesised.
 
   The noise level is randomized for each training copy, since the real ATD's level is unknown.
-  Each game is degraded with four seeds: about 1.7 M frames, of which every 4th is used
+  Each game is degraded with eight seeds: about 3.4 M frames, of which every 4th is used
   (neighbouring frames are near-duplicates), each seen from both teams' points of view.
 
 ## 4. Validation
@@ -156,10 +159,10 @@ All comparisons are **paired** on identical test units. Two independent code rev
 round. Among other things they found two label leaks in an early degradation, both fixed before
 any number here was produced.
 
-| fresh seeds 401–403 | spellF1 | macroF1 | spellF1, harsh tracking |
+| fresh seeds 501–503 | spellF1 | macroF1 | spellF1, harsh tracking |
 |---|---|---|---|
 | baseline idea (nearest player, ±2 s vote) | ≈ 0.20 | ≈ 0.46 | — |
-| **this pipeline (shipped)** | **0.758 ± 0.014** | **0.904** | **0.699 ± 0.015** |
+| **this pipeline (shipped)** | **0.768 ± 0.009** | **0.910** | **0.715 ± 0.024** |
 
 What moved the score (paired, on fresh seeds, details in `docs/DEVLOG.md`):
 
@@ -169,6 +172,7 @@ What moved the score (paired, on fresh seeds, details in `docs/DEVLOG.md`):
 | touch and turnover features | +0.025 ± 0.005 |
 | randomized training noise + dead-ball boundary features | +0.005 (realistic), **+0.061 ± 0.011 (harsh)** |
 | possession-equal weights, 1 s stoppages, margin rule | **+0.016 ± 0.003** (9/9) |
+| 600 boosting rounds and 8 noise copies per game (was 300 and 4) | **+0.014 ± 0.003** (9/9), harsh **+0.016 ± 0.003** (9/9) |
 
 Measured and **not** shipped: a second-stage context model, Smart Tagging priors, pass and
 steal sequence features, a learned hand-over detector (opt-in `--hand-over`; it raised short
@@ -177,9 +181,9 @@ on the target match with algorithmic pseudo-labels (+0.001 ± 0.002; the pseudo-
 exactly where the model is). None improved spellF1 beyond noise.
 
 **Error profile** (shipped pipeline, 2 s matching window):
-- 63% of true possession switches are found;
-- 71% of stops and 76% of restarts are found;
-- with perfect team labels spellF1 would be ≈ 0.93, and with perfect dead-ball labels ≈ 0.79, so
+- 65% of true possession switches are found;
+- 73% of stops and 79% of restarts are found;
+- with perfect team labels spellF1 would be ≈ 0.93, and with perfect dead-ball labels ≈ 0.83, so
   possession hand-overs are where the remaining score is.
 - **Ceiling for ball detection:** the shipped model, unchanged, gains **+0.036 ± 0.009** (9/9)
   when 20% instead of 36–46% of the ball is missing. That is why the optional video detector

@@ -40,9 +40,10 @@ def decoder(hand_over=None):
     on = HAND_OVER if hand_over is None else hand_over
     return dict(DECODER, **(HAND_DECODER if on else {}))
 
-# Degradation seeds used to build the training set from each sample game. Four rather than two:
-# more varied noise for the same three matches (see docs/TECHNICAL.md).
-TRAIN_SEEDS = (1, 2, 3, 4)
+# Degradation seeds used to build the training set from each sample game. Eight: more varied
+# noise for the same three matches; with 600 boosting rounds this gave +0.014 spellF1 on fresh
+# seeds (docs/DEVLOG.md, round 8).
+TRAIN_SEEDS = (1, 2, 3, 4, 5, 6, 7, 8)
 
 
 def challenge_modules():

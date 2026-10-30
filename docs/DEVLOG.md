@@ -18,6 +18,28 @@ choosing between designs, and each round's final numbers come from a seed range 
 looked at (201–203, then 301–303). Comparisons are **paired** on identical test units, and every
 arm of a comparison is evaluated with the current degradation code.
 
+**Round 8, model capacity (design seeds 101–103; confirmed on fresh 501–503), shipped.**
+Boosting settings and the amount of training data had never been tuned. Paired against the
+round-7 model on the design seeds:
+
+| arm | default | harsh |
+|---|---|---|
+| 600 rounds (was 300) | +0.0061 ± 0.0026 (7/9) | +0.0078 ± 0.0036 (8/9) |
+| 1200 rounds | level with 600 | level with 600 |
+| every 2nd frame instead of every 4th | −0.003 | +0.002 |
+| 8 noise copies per game (was 4) | +0.0028 ± 0.0028 (5/9) | +0.0094 ± 0.0040 (7/9) |
+| 15 leaves (was 31) | −0.006 | −0.004 |
+| 600 rounds, 63 leaves | +0.003 | −0.000 |
+| **600 rounds + 8 copies** | **+0.0132 ± 0.0028 (8/9)** | **+0.0137 ± 0.0055 (7/9)** |
+
+The round-7 model was underfitting. More rounds help, and more varied noise copies help once the
+model has the capacity to use them. Denser frames, which are near-duplicates, and bigger trees do
+not. Re-sweeping the decoder on seed 100 with the new model found a flat optimum: the shipped
+costs score 0.7624, the best grid point 0.7637 at lower macroF1. The costs were therefore left
+unchanged. **Fresh seeds 501–503**, no decision having looked at them: spellF1 0.7538 → **0.7675**
+(+0.0137 ± 0.0026, better in 9/9), harsh 0.6991 → **0.7147** (+0.0156 ± 0.0026, 9/9), macroF1
+0.906 → 0.910. Error profile: switches found 65% (was 63%), stops 73% (71%), restarts 79% (76%).
+
 **Round 7, self-training on the target match (design seeds 101–103), not shipped.** The rules
 allow pseudo-labels on the provided game when an algorithm produces them, so we tested test-time
 adaptation (`scripts/selftrain_eval.py`). The base models label the held-out game and the decoder

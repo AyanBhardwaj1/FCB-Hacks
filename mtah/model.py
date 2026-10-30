@@ -31,7 +31,7 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 from .features import frames_since, matrices, rolling_mean, side_means
 
 # Params
-GB_PARAMS = dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=31, min_samples_leaf=400,
+GB_PARAMS = dict(max_iter=600, learning_rate=0.05, max_leaf_nodes=31, min_samples_leaf=400,
                  l2_regularization=1.0, early_stopping=False, random_state=0)
 STAGE2_PARAMS = dict(max_iter=200, learning_rate=0.05, max_leaf_nodes=15, min_samples_leaf=400,
                      l2_regularization=1.0, early_stopping=False, random_state=0)

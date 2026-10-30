@@ -28,7 +28,7 @@ design decision looked at), scored with the challenge's own `possession_metrics.
 | method | spellF1 | macroF1 | spellF1, harsh degradation |
 |---|---|---|---|
 | challenge baseline idea (nearest player, ±2 s majority vote) | ~0.20 | ~0.46 | — |
-| **this pipeline** | **0.758 ± 0.014** | **0.904** | **0.699 ± 0.015** |
+| **this pipeline** | **0.768 ± 0.009** | **0.910** | **0.715 ± 0.024** |
 
 The baseline's ~0.20 here is close to its 0.2433 on the real match, which suggests the degraded
 sample games are a fair stand-in. These are **not** competition scores. The real number only
