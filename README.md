@@ -49,7 +49,7 @@ pip install -r requirements.txt  # exact pins: the file must regenerate byte for
 # 0. optional, no match data needed: check this machine makes the same file as ours
 python scripts/make_fake_bundle.py                 # stand-in bundle from Metrica's public data
 python run.py --data-dir cache/fake_data --out /tmp/check.csv
-shasum -a 256 /tmp/check.csv                       # expect 7a51203b824eba14...
+shasum -a 256 /tmp/check.csv                       # expect b296386c9bad3790...
 
 # 1. put the challenge data in THIS repo's data/ (not the challenge repo's; never commit it).
 #    Only two files are needed -- download them one by one, not as a folder zip:

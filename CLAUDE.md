@@ -32,7 +32,7 @@ git submodule update --init          # the challenge repo, if the clone was not 
    ```bash
    python scripts/make_fake_bundle.py
    python run.py --data-dir cache/fake_data --out /tmp/check.csv
-   shasum -a 256 /tmp/check.csv       # expect 7a51203b824eba14... (same on Linux and macOS x86-64)
+   shasum -a 256 /tmp/check.csv       # expect b296386c9bad3790... (Linux x86-64 reference)
    ```
 
    A different hash with an otherwise clean run means this machine's floating point differs

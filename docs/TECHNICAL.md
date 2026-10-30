@@ -259,7 +259,8 @@ RUN_COMMAND                                   # the exact command that produced 
 - **Same-output check without match data:** `python scripts/make_fake_bundle.py`, then
   `python run.py --data-dir cache/fake_data --out check.csv`. That builds a stand-in bundle in the
   challenge's format from Metrica's public sample data. The file's SHA-256 should start
-  `7a51203b824eba14`, as it does on Linux x86-64 and macOS x86-64 with the pinned environment.
+  `b296386c9bad3790` on Linux x86-64 with the pinned environment. The previous model's output
+  also matched byte for byte on macOS x86-64.
 - **Determinism:** fixed seeds, no randomness at prediction time, pinned packages and pinned
   sample data. Two runs give byte-identical files. When the model was committed, retraining it
   from scratch (`python train.py`) gave the same output byte for byte (compare SHA-256 of the
