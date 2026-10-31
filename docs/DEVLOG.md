@@ -18,6 +18,18 @@ choosing between designs, and each round's final numbers come from a seed range 
 looked at (201–203, then 301–303). Comparisons are **paired** on identical test units, and every
 arm of a comparison is evaluated with the current degradation code.
 
+**Round 9, past the round-8 settings (design seeds 101–103), nothing shipped.** Paired against
+the shipped 600 rounds × 8 noise copies:
+
+| arm | default | harsh |
+|---|---|---|
+| 900 rounds | +0.0024 ± 0.0017 (7/9) | −0.0023 ± 0.0023 (3/9) |
+| at least 200 frames per leaf (was 400) | +0.0006 ± 0.0030 (3/9) | +0.0000 ± 0.0022 (4/9) |
+| 12 noise copies per game | −0.0007 ± 0.0027 (3/9) | +0.0063 ± 0.0033 (6/9) |
+
+The shipped settings sit on the plateau. More copies only help on the harsh setting, not on the
+realistic one we optimise for, so nothing changed.
+
 **Round 8, model capacity (design seeds 101–103; confirmed on fresh 501–503), shipped.**
 Boosting settings and the amount of training data had never been tuned. Paired against the
 round-7 model on the design seeds:
