@@ -624,3 +624,25 @@ def test_turning_on_the_hand_over_option_also_turns_it_on_in_decoding():
     assert on["hand_w"] > 0 and off.get("hand_w", 0.0) == 0.0
     assert {k: v for k, v in on.items() if not k.startswith("hand_")} == \
         {k: v for k, v in off.items() if not k.startswith("hand_")}
+
+
+# -- the committed model ------------------------------------------------------------------------------
+
+def test_committed_model_matches_the_shipped_configuration():
+    """models/frame_models.pkl must be what train.py builds from the current settings: same
+    boosting parameters, stride, weighting and options, fully trained, and expecting exactly the
+    features the current code computes. Fails if a setting changes without a retrain."""
+    import pickle
+
+    from mtah import model as mm
+    with open(config.MODEL_PATH, "rb") as fh:
+        models = pickle.load(fh)
+    s1 = models.stage1
+    assert s1.gb_params == mm.GB_PARAMS
+    assert s1.stride == mm.TRAIN_STRIDE
+    assert s1.spell_weighting == config.SPELL_WEIGHTING and s1.hand_over == config.HAND_OVER
+    assert not models.use_stage2 and s1.exclude is None
+    for clf in (s1.dead, s1.poss):
+        assert clf.n_iter_ == mm.GB_PARAMS["max_iter"]
+    nt, _, _, ns, _ = features.matrices(features.compute(_toy_match(0)[0]))
+    assert s1.names == (list(nt), list(ns))
